@@ -1,0 +1,14 @@
+node_modules/
+.next/
+data/
+.env
+.env.local
+*.log
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+.artifact-work/
+outputs/**/preview-*.png
+outputs/**/*.inspect.ndjson
+outputs/**/模板预览总览.png

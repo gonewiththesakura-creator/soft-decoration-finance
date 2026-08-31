@@ -1,0 +1,3 @@
+-- Canonical schema: generated from src/db/migration.ts for external PostgreSQL deployment.
+-- Run the CREATE TABLE/INDEX statements exported as INITIAL_MIGRATION.
+-- This repository uses that source directly to keep local and hosted schemas identical.

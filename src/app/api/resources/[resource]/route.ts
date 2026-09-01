@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
-import { createResource } from "@/data/mutations";
+import { createResource, updateResource } from "@/data/mutations";
 import type { ResourceKey } from "@/lib/permissions";
 
 export async function POST(request: Request, context: { params: Promise<{ resource: string }> }) {
@@ -12,6 +12,20 @@ export async function POST(request: Request, context: { params: Promise<{ resour
     return NextResponse.json({ ok: true, result });
   } catch (error) {
     const message = error instanceof Error ? error.message : "新增失败";
+    return NextResponse.json({ error: message }, { status: message === "FORBIDDEN" ? 403 : 400 });
+  }
+}
+
+export async function PATCH(request: Request, context: { params: Promise<{ resource: string }> }) {
+  const user = await getSession();
+  if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
+  const { resource } = await context.params;
+  try {
+    const body = await request.json();
+    const result = await updateResource(resource as ResourceKey, Number(body.id), body, user);
+    return NextResponse.json({ ok: true, result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "修改失败";
     return NextResponse.json({ error: message }, { status: message === "FORBIDDEN" ? 403 : 400 });
   }
 }

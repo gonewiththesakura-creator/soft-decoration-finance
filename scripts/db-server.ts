@@ -53,7 +53,7 @@ async function main() {
               }
               return param;
             });
-            output.push((await directClient.query<Record<string, unknown>>(statement.query, params)).rows);
+            output.push(await directQuery(statement.query, params));
           }
           await directClient.exec("COMMIT");
           return output;

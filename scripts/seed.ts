@@ -8,7 +8,10 @@ import {
   contracts,
   customers,
   goodsReceipts,
+  invoiceAllocations,
   invoices,
+  inventoryBatches,
+  inventoryTransactions,
   payables,
   paymentApprovals,
   paymentRequests,
@@ -36,6 +39,7 @@ const dateAt = (days: number) => new Date(now.getTime() + days * DAY);
 const yuan = (value: number) => Math.round(value * 100);
 
 async function seed() {
+  if (process.env.NODE_ENV === "production" && process.env.ALLOW_DEMO_SEED !== "true") throw new Error("Demo seed is disabled in production. Set ALLOW_DEMO_SEED=true only for an isolated demonstration environment.");
   await ensureDatabase();
   const [{ count }] = await sqlQuery<{ count: number }>("SELECT count(*)::int AS count FROM companies");
   if (count > 0) {
@@ -249,6 +253,11 @@ async function seed() {
       companyId: order.companyId, projectId: order.projectId, purchaseOrderId: order.id, number: `SH-${String(i + 1).padStart(5, "0")}`,
       quantity: 1, amountCents: delivered, destination: "项目直送", receivedAt: dateAt(-20 + i % 18), createdBy: owner.id,
     });
+    const [item] = await sqlQuery<{ skuId: number; quantity: number }>(`SELECT sku_id AS "skuId",quantity FROM purchase_request_items WHERE request_id=$1 ORDER BY id LIMIT 1`, [request.id]);
+    if (item) {
+      const [batch] = await db.insert(inventoryBatches).values({ companyId: order.companyId, projectId: order.projectId, skuId: item.skuId, purchaseOrderId: order.id, batchNumber: `BATCH-${String(i + 1).padStart(5, "0")}`, quantity: item.quantity, remainingQuantity: item.quantity, unitCostCents: Math.round(delivered / item.quantity), status: "在库", createdBy: owner.id }).returning();
+      await db.insert(inventoryTransactions).values({ companyId: order.companyId, projectId: order.projectId, batchId: batch.id, type: "采购入库", quantity: item.quantity, amountCents: delivered, happenedAt: dateAt(-20 + i % 18), note: "Seed 到货入库", createdBy: owner.id });
+    }
     const [payable] = await db.insert(payables).values({
       companyId: order.companyId, projectId: order.projectId, supplierId: order.supplierId, purchaseOrderId: order.id,
       number: `YF-${String(i + 1).padStart(5, "0")}`, amountCents: order.amountCents, paidCents: 0,
@@ -261,15 +270,18 @@ async function seed() {
   let paymentSequence = 1;
   for (const [i, payable] of payableRows.entries()) {
     const isPending = i % 5 === 0;
+    const isApproved = i % 5 === 1;
     const amount = i % 3 === 0 ? Math.round(payable.amountCents * 0.5) : payable.amountCents;
     const [request] = await db.insert(paymentRequests).values({
       companyId: payable.companyId, projectId: payable.projectId, payableId: payable.id,
       number: `FKSQ-${String(i + 1).padStart(5, "0")}`, amountCents: amount,
       accountId: accountRows.find((a) => a.companyId === payable.companyId)!.id, requestedBy: owner.id,
-      status: isPending ? "待审批" : "已通过", reason: `${payable.paymentNode}到期付款`, createdBy: owner.id,
+      status: isPending ? "待审批" : isApproved ? "已通过" : "已付款", reason: `${payable.paymentNode}到期付款`, createdBy: owner.id,
     }).returning();
     if (!isPending) {
       await db.insert(paymentApprovals).values({ companyId: payable.companyId, projectId: payable.projectId, paymentRequestId: request.id, approverId: owner.id, decision: "通过", comment: "付款资料完整" });
+    }
+    if (!isPending && !isApproved) {
       const chunks = i % 2 === 0 ? 2 : 1;
       for (let chunk = 0; chunk < chunks; chunk++) {
         const chunkAmount = chunk === chunks - 1 ? amount - Math.floor(amount / chunks) * (chunks - 1) : Math.floor(amount / chunks);
@@ -283,7 +295,7 @@ async function seed() {
     }
   }
 
-  const returnValues = orderRows.filter((_, i) => i % 11 === 0).map((order, i) => {
+  const returnValues = orderRows.filter((_, i) => i % 11 === 0 && i % 3 === 0).map((order, i) => {
     const payable = payableRows.find((row) => row.purchaseOrderId === order.id)!;
     return {
       companyId: order.companyId, projectId: order.projectId, purchaseOrderId: order.id, payableId: payable.id,
@@ -310,7 +322,16 @@ async function seed() {
       amountCents: Math.round(project.currentContractCents * [0.2, 0.2, 0.15][n]), issuedAt: dateAt(-80 + i * 2 + n * 15), createdBy: owner.id,
     });
   });
-  await db.insert(invoices).values(invoiceValues);
+  const invoiceRows = await db.insert(invoices).values(invoiceValues).returning();
+  for (const invoice of invoiceRows) {
+    if (invoice.direction === "进项") {
+      const payable = payableRows.find((row) => row.projectId === invoice.projectId && row.supplierId === invoice.supplierId);
+      if (payable) await db.insert(invoiceAllocations).values({ companyId: invoice.companyId, projectId: invoice.projectId, invoiceId: invoice.id, payableId: payable.id, amountCents: Math.min(invoice.amountCents, payable.amountCents), createdBy: owner.id });
+    } else {
+      const plan = planRows.find((row) => row.projectId === invoice.projectId && !row.isWarranty);
+      if (plan) await db.insert(invoiceAllocations).values({ companyId: invoice.companyId, projectId: invoice.projectId, invoiceId: invoice.id, receivablePlanId: plan.id, amountCents: Math.min(invoice.amountCents, plan.amountCents), createdBy: owner.id });
+    }
+  }
 
   const logValues: typeof auditLogs.$inferInsert[] = [];
   projectRows.forEach((project) => logValues.push({ companyId: project.companyId, projectId: project.id, userId: project.managerId, objectType: "project", objectId: project.id, action: "CREATE", after: { code: project.code, name: project.name, status: project.status }, ip: "127.0.0.1" }));

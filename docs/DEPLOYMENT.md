@@ -18,6 +18,7 @@
 AUTH_SECRET=至少32字节的随机值
 PGLITE_DATA_DIR=D:/zhiheng-data/finance-db
 PGLITE_SERVER_PORT=3199
+ALLOW_DEMO_SEED=false
 NEXT_PUBLIC_APP_NAME=织衡经营财务
 ```
 
@@ -43,6 +44,7 @@ npm start -- -p 3000
 ## 安全检查
 
 - 更换所有 Seed 密码，禁用不使用的账号。
+- 生产环境默认拒绝执行演示 Seed；仅隔离演示环境可临时设置 `ALLOW_DEMO_SEED=true`。
 - 使用至少 32 字节随机 `AUTH_SECRET`。
 - 只通过 HTTPS 暴露 Next.js 端口。
 - 限制主机与备份目录访问权限。

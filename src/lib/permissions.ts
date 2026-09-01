@@ -9,17 +9,17 @@ export type ResourceKey =
 const roleAccess: Record<SessionUser["role"], ResourceKey[] | "all"> = {
   owner: "all",
   finance: ["accounts", "customers", "suppliers", "projects", "contracts", "receivables", "receipts", "purchase-orders", "payables", "payment-requests", "payments", "invoices", "budgets", "changes", "returns", "imports", "audit-logs", "ai"],
-  procurement: ["suppliers", "projects", "skus", "quotes", "purchase-requests", "purchase-orders", "payables", "returns", "inventory", "audit-logs", "ai"],
-  project_manager: ["customers", "suppliers", "projects", "contracts", "receivables", "receipts", "skus", "quotes", "purchase-requests", "purchase-orders", "payables", "payment-requests", "payments", "invoices", "budgets", "changes", "audit-logs", "ai"],
-  designer: ["projects", "skus", "quotes", "purchase-requests", "budgets", "changes", "audit-logs", "ai"],
+  procurement: ["suppliers", "projects", "skus", "quotes", "purchase-requests", "purchase-orders", "payables", "returns", "inventory", "imports", "ai"],
+  project_manager: ["customers", "suppliers", "projects", "contracts", "receivables", "skus", "quotes", "purchase-requests", "purchase-orders", "payables", "payment-requests", "budgets", "changes", "ai"],
+  designer: ["projects", "skus", "quotes", "purchase-requests", "budgets", "changes", "ai"],
 };
 
 const writeAccess: Record<SessionUser["role"], ResourceKey[] | "all"> = {
-  owner: "all",
+  owner: ["companies", "accounts", "users", "customers", "suppliers", "projects", "imports"],
   finance: ["accounts", "customers", "contracts", "receivables", "receipts", "payables", "payment-requests", "payments", "invoices", "imports"],
-  procurement: ["suppliers", "skus", "quotes", "purchase-requests", "returns", "inventory"],
-  project_manager: ["projects", "contracts", "receivables", "receipts", "skus", "purchase-requests", "payment-requests", "changes"],
-  designer: ["skus", "quotes", "purchase-requests", "changes"],
+  procurement: ["suppliers", "skus", "quotes", "purchase-requests", "returns", "inventory", "imports"],
+  project_manager: ["projects", "payment-requests", "changes"],
+  designer: [],
 };
 
 export function can(user: SessionUser, resource: ResourceKey, action: "read" | "write" = "read") {

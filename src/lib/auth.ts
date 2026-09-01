@@ -6,7 +6,12 @@ import { sqlQuery } from "@/db/client";
 import type { UserRole } from "@/db/schema";
 
 const COOKIE_NAME = "zhiheng_session";
-const secret = new TextEncoder().encode(process.env.AUTH_SECRET ?? "development-secret");
+function loadSecret() {
+  const value = process.env.AUTH_SECRET;
+  if (!value && process.env.NODE_ENV === "production") throw new Error("AUTH_SECRET is required in production");
+  return new TextEncoder().encode(value ?? "development-only-secret-change-before-production");
+}
+const secret = loadSecret();
 
 export type SessionUser = {
   id: number;
@@ -16,13 +21,18 @@ export type SessionUser = {
   role: UserRole;
 };
 
-export async function authenticate(email: string, password: string) {
+export async function authenticate(email: string, password: string, ip = "127.0.0.1") {
+  const normalizedEmail = email.trim().toLowerCase();
+  const [attempts] = await sqlQuery<{ failures: number }>(`SELECT count(*)::int AS failures FROM login_attempts WHERE lower(email)=$1 AND ip=$2 AND NOT success AND attempted_at>now()-interval '15 minutes'`, [normalizedEmail, ip]);
+  if (attempts.failures >= 5) throw new Error("RATE_LIMITED");
   const [user] = await sqlQuery<SessionUser & { passwordHash: string; status: string }>(
     `SELECT id, company_id AS "companyId", name, email, password_hash AS "passwordHash", role, status
      FROM users WHERE lower(email) = lower($1) LIMIT 1`,
-    [email],
+    [normalizedEmail],
   );
-  if (!user || user.status !== "active" || !(await compare(password, user.passwordHash))) return null;
+  const success = Boolean(user && user.status === "active" && await compare(password, user.passwordHash));
+  await sqlQuery(`INSERT INTO login_attempts(email,ip,user_id,success) VALUES($1,$2,$3,$4)`, [normalizedEmail, ip, user?.id ?? null, success]);
+  if (!success || !user) return null;
   return { id: user.id, companyId: user.companyId, name: user.name, email: user.email, role: user.role } satisfies SessionUser;
 }
 
@@ -30,7 +40,7 @@ export async function createSession(user: SessionUser) {
   const token = await new SignJWT(user).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setExpirationTime("12h").sign(secret);
   const store = await cookies();
   store.set(COOKIE_NAME, token, { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/", maxAge: 60 * 60 * 12 });
-  if (user.role === "owner") store.set("company_scope", "all", { httpOnly: true, sameSite: "lax", path: "/" });
+  if (user.role === "owner") store.set("company_scope", "all", { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/" });
 }
 
 export async function getSession(): Promise<SessionUser | null> {
@@ -38,7 +48,11 @@ export async function getSession(): Promise<SessionUser | null> {
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, secret);
-    return payload as unknown as SessionUser;
+    const id = Number(payload.id);
+    if (!Number.isInteger(id)) return null;
+    const [current] = await sqlQuery<SessionUser & { status: string }>(`SELECT id,company_id AS "companyId",name,email,role,status FROM users WHERE id=$1`, [id]);
+    if (!current || current.status !== "active") return null;
+    return { id: current.id, companyId: current.companyId, name: current.name, email: current.email, role: current.role };
   } catch {
     return null;
   }

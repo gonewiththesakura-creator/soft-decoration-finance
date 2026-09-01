@@ -19,5 +19,7 @@ export async function ensureDirectDatabase() {
 
 export async function directQuery<T extends Record<string, unknown> = Record<string, unknown>>(query: string, params: unknown[] = []) {
   await ensureDirectDatabase();
-  return (await directClient.query<T>(query, params)).rows;
+  const result = await directClient.query<T>(query, params);
+  const numericFields = new Set(result.fields.filter((field) => field.dataTypeID === 1700).map((field) => field.name));
+  return result.rows.map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, numericFields.has(key) && typeof value === "string" ? Number(value) : value])) as T);
 }

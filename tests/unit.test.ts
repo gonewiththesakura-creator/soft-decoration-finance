@@ -6,6 +6,9 @@ import type { SessionUser } from "@/lib/auth";
 
 const finance: SessionUser = { id: 2, companyId: 1, name: "财务", email: "finance@test", role: "finance" };
 const designer: SessionUser = { id: 3, companyId: 1, name: "设计", email: "designer@test", role: "designer" };
+const owner: SessionUser = { id: 1, companyId: null, name: "老板", email: "owner@test", role: "owner" };
+const procurement: SessionUser = { id: 4, companyId: 1, name: "采购", email: "procurement@test", role: "procurement" };
+const manager: SessionUser = { id: 5, companyId: 1, name: "项目经理", email: "manager@test", role: "project_manager" };
 
 describe("role permissions", () => {
   it("allows finance to record payments but blocks procurement editing", () => {
@@ -13,10 +16,17 @@ describe("role permissions", () => {
     expect(can(finance, "skus", "write")).toBe(false);
   });
 
-  it("keeps designer away from accounts and invoices", () => {
-    expect(can(designer, "skus", "write")).toBe(true);
+  it("keeps designer away from financial and procurement writes", () => {
+    expect(can(designer, "skus", "write")).toBe(false);
     expect(can(designer, "accounts")).toBe(false);
     expect(can(designer, "invoices")).toBe(false);
+  });
+
+  it("separates approval, procurement and financial confirmation duties", () => {
+    expect(can(owner, "payments", "write")).toBe(false);
+    expect(can(procurement, "skus", "write")).toBe(true);
+    expect(can(manager, "payment-requests", "write")).toBe(true);
+    expect(can(manager, "receipts", "write")).toBe(false);
   });
 });
 

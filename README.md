@@ -13,7 +13,7 @@
 - 收款登记、应收余额与账户余额联动
 - 项目经营总账、质保金独立状态、预算版本、退货冲减及操作日志
 - 老板首页六项核心指标与未来 30 天现金流
-- 14 类 Excel 模板、上传预检、错误定位、确认导入和导入日志
+- 数据迁移中心：日常标准导入、历史多 Sheet、字段 Mapping、名称解析、暂存预检、批次血缘和安全撤销
 - 只读 AI Query Service，回答逾期、超预算、欠票、应收应付和资金缺口
 
 ## 技术架构
@@ -30,7 +30,7 @@
 
 ## 快速启动
 
-要求 Node.js 22+。
+要求 Node.js 22.x。
 
 ```bash
 npm install
@@ -66,6 +66,8 @@ npm run db:seed
 
 ```bash
 npm run dev          # 数据库服务 + 开发服务器
+npm run dev:clean    # 安全清理 .next 后启动开发服务器
+npm run clean        # 只清理 .next 构建缓存
 npm run build        # 生产构建
 npm start            # 数据库服务 + 生产服务器
 npm test             # 临时隔离数据库上的单元与集成测试
@@ -73,6 +75,7 @@ npm run typecheck    # TypeScript 检查
 npm run lint         # ESLint
 npm run db:seed      # 初始化关联演示数据
 npm run db:reset     # 清空并重建本地 Schema（先停止应用）
+npm run templates:generate # 重新生成标准模板和 5 套迁移测试工作簿
 ```
 
 ## 数据规模
@@ -94,13 +97,15 @@ docs/                    权限、测试、部署与版本状态
 
 ## Excel 模板
 
-系统内可以按业务对象下载单独模板。完整汇总模板位于 [软装项目经营财务系统导入模板.xlsx](outputs/soft-decoration-finance/软装项目经营财务系统导入模板.xlsx)，包含使用说明及 14 个业务 Sheet。
+系统内可以按业务对象下载不含数据库 ID 的单独模板。完整汇总模板位于 [软装项目经营财务系统导入模板.xlsx](outputs/soft-decoration-finance/软装项目经营财务系统导入模板.xlsx)，包含使用说明及 14 个业务 Sheet；5 套历史格式测试工作簿位于 `tests/fixtures/data-migration`。
 
 ## 文档
 
 - [权限说明](docs/PERMISSIONS.md)
 - [测试说明](docs/TESTING.md)
 - [部署说明](docs/DEPLOYMENT.md)
+- [Windows 运行稳定性](docs/RUNTIME-STABILITY.md)
+- [数据迁移中心](docs/DATA-MIGRATION.md)
 - [完成情况、已知问题与二期建议](docs/STATUS.md)
 
 ## 数据备份

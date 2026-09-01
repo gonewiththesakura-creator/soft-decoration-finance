@@ -2,8 +2,13 @@
   "name": "soft-decoration-finance",
   "version": "1.0.0",
   "private": true,
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "node scripts/run-app.mjs dev",
+    "clean": "node scripts/clean.mjs",
+    "dev:clean": "npm run clean && npm run dev",
     "build": "next build",
     "start": "node scripts/run-app.mjs start",
     "lint": "eslint .",
@@ -11,7 +16,8 @@
     "test": "node scripts/test-runner.mjs",
     "db:seed": "tsx scripts/seed.ts",
     "db:reset": "tsx scripts/reset-db.ts",
-    "db:server": "tsx scripts/db-server.ts"
+    "db:server": "tsx scripts/db-server.ts",
+    "templates:generate": "tsx scripts/generate-standard-template.ts && node scripts/generate-migration-fixtures.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.3.14",
@@ -22,9 +28,9 @@
     "drizzle-orm": "^0.44.5",
     "jose": "^6.1.0",
     "lucide-react": "^0.542.0",
-    "next": "^15.5.2",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
+    "next": "15.5.24",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
     "tailwind-merge": "^3.3.1",
     "xlsx": "^0.18.5",
     "zod": "^4.1.5"

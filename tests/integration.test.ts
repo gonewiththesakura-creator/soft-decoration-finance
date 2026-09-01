@@ -8,6 +8,8 @@ import { createAttachment, getAttachmentContent, getAttachments, voidAttachment 
 import { getDocumentDetail } from "@/data/document-detail";
 import { getFinanceWorkspace } from "@/data/finance-workspace";
 import { getCustomerProfile, getSupplierProfile } from "@/data/partners";
+import * as XLSX from "xlsx";
+import { confirmMigrationBatch, createMigrationWorkbook, getMigrationBatch, importMigrationBatch, rollbackMigrationBatch, stageMigrationBatch, suggestedMappings, updateStagingRow } from "@/data/data-migration";
 import { createWorkspacePurchaseRequest, getProcurementWorkspace } from "@/data/procurement-workspace";
 import { getProjectDetail } from "@/data/project-detail";
 import { authenticate } from "@/lib/auth";
@@ -169,6 +171,41 @@ describe.sequential("business workflow integration", () => {
     const detail = await getDocumentDetail("purchase-order", order.id, owner);
     expect(detail).not.toBeNull(); expect(detail!.relations.some((item) => item.label === "项目")).toBe(true);
     expect(detail!.relations.some((item) => item.label === "采购申请")).toBe(true); expect(detail!.events.length).toBeGreaterThan(0);
+  });
+
+  it("migrates a legacy workbook through mapping, staging, lineage and safe rollback", async () => {
+    const finance = await financeFor(1); const [company] = await sqlQuery<{ name: string }>(`SELECT name FROM companies WHERE id=1`); const customerCode = `MIG-${Date.now()}`;
+    const makeFile = (contact: string) => {
+      const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([["历史数据迁移测试"]]), "说明");
+      XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet([{ 所属公司: company.name.replace("软装", "软装工程"), 客户编码: customerCode, 甲方: "迁移测试客户有限公司", 客户类型: "商业客户", 联系人: contact, 联系电话: "13800000000" }]), "客户历史");
+      const bytes = XLSX.write(book, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
+      return new File([bytes], `客户历史-${contact}.xlsx`, { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    };
+    const workbook = await createMigrationWorkbook(makeFile("陈经理"), finance); expect(workbook.sheets).toHaveLength(2); expect(workbook.sheets[1].rowCount).toBe(1);
+    const mappings = suggestedMappings("customers", workbook.sheets[1].headers); expect(mappings["所属公司"]).toBe("companyId"); expect(mappings["甲方"]).toBe("name");
+    const staged = await stageMigrationBatch({ batchId: workbook.batchId, sheetId: workbook.sheets[1].id, businessType: "customers", mappings, saveTemplateName: "客户历史表测试格式" }, finance);
+    expect(staged).toMatchObject({ ready: 0, warning: 1, error: 0, total: 1 });
+    await expect(confirmMigrationBatch(workbook.batchId, finance)).rejects.toThrow("关联候选未逐项确认");
+    const pending = await getMigrationBatch(workbook.batchId, finance); expect(pending.unresolvedReferences).toBe(1);
+    await updateStagingRow(workbook.batchId, Number(pending.rows[0].id), { fieldKey: "companyId", confirmedReferenceId: 1 }, finance);
+    const resolved = await getMigrationBatch(workbook.batchId, finance); expect(resolved.unresolvedReferences).toBe(0); expect(resolved.rows[0].status).toBe("READY");
+    await confirmMigrationBatch(workbook.batchId, finance); const imported = await importMigrationBatch(workbook.batchId, finance); expect(imported.successRows).toBe(1);
+    const [saved] = await sqlQuery<{ id: number; lineage: number; batchStatus: string }>(`SELECT c.id,(SELECT count(*)::int FROM import_data_lineage l WHERE l.target_table='customers' AND l.target_id=c.id) AS lineage,(SELECT status FROM import_batches WHERE id=$2) AS "batchStatus" FROM customers c WHERE c.code=$1`, [customerCode, workbook.batchId]);
+    expect(saved.lineage).toBe(1); expect(saved.batchStatus).toBe("COMPLETED");
+    const [template] = await sqlQuery<{ count: number }>(`SELECT count(*)::int AS count FROM import_mapping_templates WHERE name='客户历史表测试格式' AND business_type='customers'`); expect(template.count).toBe(1);
+    const [alias] = await sqlQuery<{ count: number }>(`SELECT count(*)::int AS count FROM entity_aliases WHERE entity_type='company' AND alias=$1`, [company.name.replace("软装", "软装工程")]); expect(alias.count).toBe(1);
+
+    const duplicateWorkbook = await createMigrationWorkbook(makeFile("王经理"), finance); const duplicateMappings = suggestedMappings("customers", duplicateWorkbook.sheets[1].headers);
+    const duplicateStage = await stageMigrationBatch({ batchId: duplicateWorkbook.batchId, sheetId: duplicateWorkbook.sheets[1].id, businessType: "customers", mappings: duplicateMappings }, finance);
+    expect(duplicateStage.warning).toBe(1); const duplicateDetail = await getMigrationBatch(duplicateWorkbook.batchId, finance); expect(duplicateDetail.rows[0].duplicateStatus).toBe("EXISTING"); expect(duplicateDetail.rows[0].action).toBe("MATCH");
+    const financeCompany2 = await financeFor(2); await expect(getMigrationBatch(workbook.batchId, financeCompany2)).rejects.toThrow("权限范围");
+
+    const rollback = await rollbackMigrationBatch(workbook.batchId, finance); expect(rollback.ok).toBe(true);
+    const [remaining] = await sqlQuery<{ count: number }>(`SELECT count(*)::int AS count FROM customers WHERE id=$1`, [saved.id]); expect(remaining.count).toBe(0);
+    const [rolledBack] = await sqlQuery<{ status: string; lineage: number; jobStatus: string }>(`SELECT status,(SELECT count(*)::int FROM import_data_lineage WHERE batch_id=$1) AS lineage,(SELECT status FROM import_jobs WHERE migration_batch_id=$1) AS "jobStatus" FROM import_batches WHERE id=$1`, [workbook.batchId]); expect(rolledBack.status).toBe("ROLLED_BACK"); expect(rolledBack.lineage).toBe(1); expect(rolledBack.jobStatus).toBe("已撤销");
+    const retry = await createMigrationWorkbook(makeFile("陈经理"), finance); const retryMappings = suggestedMappings("customers", retry.sheets[1].headers);
+    const retryStage = await stageMigrationBatch({ batchId: retry.batchId, sheetId: retry.sheets[1].id, businessType: "customers", mappings: retryMappings }, finance); expect(retryStage.ready).toBe(1);
+    await confirmMigrationBatch(retry.batchId, finance); expect((await importMigrationBatch(retry.batchId, finance)).successRows).toBe(1); expect((await rollbackMigrationBatch(retry.batchId, finance)).ok).toBe(true);
   });
 
   it("stores attachments, enforces metadata, reads content and preserves void audit", async () => {

@@ -4,7 +4,7 @@
 
 第一版适合部署到单台 Windows 或 Linux Node.js 主机，挂载持久磁盘保存 `data/finance-db`。
 
-1. 安装 Node.js 22+。
+1. 安装 Node.js 22.x。
 2. 拉取源码并执行 `npm ci`。
 3. 创建 `.env.local`，设置强随机 `AUTH_SECRET` 和持久化路径。
 4. 首次执行 `npm run db:seed`。

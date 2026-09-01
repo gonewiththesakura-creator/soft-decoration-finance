@@ -5,9 +5,15 @@ import { assertCan, type ResourceKey } from "@/lib/permissions";
 import { validateNormalizedRows } from "./excel";
 
 export type ImportError = { row: number; field: string; message: string };
+export type MigrationLineageInput = { stagingId: number; filename: string; sheetName: string; sourceRow: number; rawData: Record<string, unknown> };
+const targetTables: Partial<Record<ResourceKey, string>> = {
+  companies: "companies", accounts: "company_accounts", customers: "customers", suppliers: "suppliers", projects: "projects", contracts: "contracts",
+  receivables: "receivable_plans", receipts: "receipts", skus: "skus", quotes: "supplier_quotes", "purchase-requests": "purchase_requests",
+  payables: "payables", payments: "payments", invoices: "invoices",
+};
 const text = (value: unknown) => String(value ?? "").trim(); const num = (value: unknown) => value === "" || value === null || value === undefined ? 0 : Number(value); const cents = (value: unknown) => Math.round(num(value) * 100);
 const uniqueConfig: Partial<Record<ResourceKey, { table: string; column: string; key: string; company?: boolean }>> = {
-  companies: { table: "companies", column: "code", key: "code" }, customers: { table: "customers", column: "code", key: "code", company: true }, suppliers: { table: "suppliers", column: "code", key: "code", company: true }, projects: { table: "projects", column: "code", key: "code" }, contracts: { table: "contracts", column: "number", key: "number" }, receipts: { table: "receipts", column: "number", key: "number" }, skus: { table: "skus", column: "code", key: "code" }, "purchase-requests": { table: "purchase_requests", column: "number", key: "number" }, payables: { table: "payables", column: "number", key: "number" }, payments: { table: "payments", column: "number", key: "number" }, invoices: { table: "invoices", column: "number", key: "number" },
+  companies: { table: "companies", column: "code", key: "code" }, customers: { table: "customers", column: "code", key: "code", company: true }, suppliers: { table: "suppliers", column: "code", key: "code", company: true }, projects: { table: "projects", column: "code", key: "code" }, contracts: { table: "contracts", column: "number", key: "number" }, receipts: { table: "receipts", column: "number", key: "number" }, skus: { table: "skus", column: "code", key: "code" }, "purchase-requests": { table: "purchase_requests", column: "number", key: "number" }, payables: { table: "payables", column: "number", key: "number" }, payments: { table: "payments", column: "number", key: "number" }, invoices: { table: "invoices", column: "number", key: "number", company: true },
 };
 
 async function one(query: string, params: unknown[]) { return (await sqlQuery<Record<string, unknown>>(query, params))[0]; }
@@ -33,51 +39,51 @@ export async function preflightImport(resource: ResourceKey, rows: Record<string
     if (resource === "projects") projectId = null;
     if (["contracts", "skus", "purchase-requests", "invoices"].includes(resource)) projectId = num(row.projectId);
     if (resource === "accounts" || resource === "customers" || resource === "suppliers" || resource === "projects") {
-      const company = await one("SELECT id FROM companies WHERE id=$1", [companyId]); if (!company) add(errors, index, "公司ID", "公司不存在");
+      const company = await one("SELECT id FROM companies WHERE id=$1", [companyId]); if (!company) add(errors, index, "公司", "公司不存在");
     } else if (projectId) {
-      const project = await one("SELECT id,company_id FROM projects WHERE id=$1", [projectId]); if (!project) add(errors, index, "项目ID", "项目不存在"); else companyId = Number(project.company_id);
+      const project = await one("SELECT id,company_id FROM projects WHERE id=$1", [projectId]); if (!project) add(errors, index, "项目", "项目不存在"); else companyId = Number(project.company_id);
     } else if (resource === "receivables") {
-      const contract = await one("SELECT id,company_id,project_id FROM contracts WHERE id=$1 AND NOT is_void", [num(row.contractId)]); if (!contract) add(errors, index, "合同ID", "合同不存在"); else { companyId = Number(contract.company_id); projectId = Number(contract.project_id); }
+      const contract = await one("SELECT id,company_id,project_id FROM contracts WHERE id=$1 AND NOT is_void", [num(row.contractId)]); if (!contract) add(errors, index, "合同", "合同不存在"); else { companyId = Number(contract.company_id); projectId = Number(contract.project_id); }
     } else if (resource === "receipts") {
-      const plan = await one("SELECT id,company_id,project_id,(amount_cents-received_cents)::float8 AS remaining FROM receivable_plans WHERE id=$1 AND NOT is_void", [num(row.receivablePlanId)]); if (!plan) add(errors, index, "应收节点ID", "应收节点不存在"); else { companyId = Number(plan.company_id); projectId = Number(plan.project_id); const total = (receiptTotals.get(num(row.receivablePlanId)) ?? 0) + cents(row.amountYuan); receiptTotals.set(num(row.receivablePlanId), total); if (total > Number(plan.remaining)) add(errors, index, "收款金额(元)", "本批收款合计超过应收余额"); }
+      const plan = await one("SELECT id,company_id,project_id,(amount_cents-received_cents)::float8 AS remaining FROM receivable_plans WHERE id=$1 AND NOT is_void", [num(row.receivablePlanId)]); if (!plan) add(errors, index, "应收节点", "应收节点不存在"); else { companyId = Number(plan.company_id); projectId = Number(plan.project_id); const total = (receiptTotals.get(num(row.receivablePlanId)) ?? 0) + cents(row.amountYuan); receiptTotals.set(num(row.receivablePlanId), total); if (total > Number(plan.remaining)) add(errors, index, "收款金额(元)", "本批收款合计超过应收余额"); }
     } else if (resource === "quotes") {
-      const sku = await one("SELECT id,company_id,project_id FROM skus WHERE id=$1", [num(row.skuId)]); if (!sku) add(errors, index, "SKUID", "SKU 不存在"); else { companyId = Number(sku.company_id); projectId = Number(sku.project_id); }
+      const sku = await one("SELECT id,company_id,project_id FROM skus WHERE id=$1", [num(row.skuId)]); if (!sku) add(errors, index, "SKU", "SKU 不存在"); else { companyId = Number(sku.company_id); projectId = Number(sku.project_id); }
     } else if (resource === "payables") {
-      const order = await one("SELECT id,company_id,project_id FROM purchase_orders WHERE id=$1 AND NOT is_void", [num(row.purchaseOrderId)]); if (!order) add(errors, index, "采购单ID", "采购单不存在"); else { companyId = Number(order.company_id); projectId = Number(order.project_id); }
+      const order = await one("SELECT id,company_id,project_id FROM purchase_orders WHERE id=$1 AND NOT is_void", [num(row.purchaseOrderId)]); if (!order) add(errors, index, "采购单", "采购单不存在"); else { companyId = Number(order.company_id); projectId = Number(order.project_id); }
     } else if (resource === "payments") {
-      const payable = await one("SELECT id,company_id,project_id,(amount_cents-paid_cents)::float8 AS remaining FROM payables WHERE id=$1 AND NOT is_void", [num(row.payableId)]); if (!payable) add(errors, index, "应付ID", "应付不存在"); else { companyId = Number(payable.company_id); projectId = Number(payable.project_id); const total = (paymentTotals.get(num(row.payableId)) ?? 0) + cents(row.amountYuan); paymentTotals.set(num(row.payableId), total); if (total > Number(payable.remaining)) add(errors, index, "付款金额(元)", "本批付款合计超过应付余额"); }
+      const payable = await one("SELECT id,company_id,project_id,(amount_cents-paid_cents)::float8 AS remaining FROM payables WHERE id=$1 AND NOT is_void", [num(row.payableId)]); if (!payable) add(errors, index, "应付", "应付不存在"); else { companyId = Number(payable.company_id); projectId = Number(payable.project_id); const total = (paymentTotals.get(num(row.payableId)) ?? 0) + cents(row.amountYuan); paymentTotals.set(num(row.payableId), total); if (total > Number(payable.remaining)) add(errors, index, "付款金额(元)", "本批付款合计超过应付余额"); }
     }
     if (companyId) { firstCompanyId ??= companyId; if (user.role !== "owner" && user.companyId !== companyId) add(errors, index, "公司范围", "不能导入其他公司数据"); }
 
-    if (resource === "projects") { const customer = await one("SELECT id FROM customers WHERE id=$1 AND company_id=$2", [num(row.customerId), companyId]); if (!customer) add(errors, index, "客户ID", "客户与项目公司不一致"); }
-    if (["quotes", "purchase-requests"].includes(resource)) { const supplier = await one("SELECT id FROM suppliers WHERE id=$1 AND company_id=$2", [num(row.supplierId), companyId]); if (!supplier) add(errors, index, "供应商ID", "供应商与项目公司不一致"); }
-    if (resource === "purchase-requests") { const sku = await one("SELECT id FROM skus WHERE id=$1 AND project_id=$2", [num(row.skuId), projectId]); if (!sku) add(errors, index, "SKUID", "SKU 不属于所选项目"); }
-    if (resource === "invoices" && text(row.direction) === "进项") { const supplier = await one("SELECT id FROM suppliers WHERE id=$1 AND company_id=$2", [num(row.supplierId), companyId]); if (!supplier) add(errors, index, "供应商ID", "进项发票供应商与项目公司不一致"); }
+    if (resource === "projects") { const customer = await one("SELECT id FROM customers WHERE id=$1 AND company_id=$2", [num(row.customerId), companyId]); if (!customer) add(errors, index, "客户", "客户与项目公司不一致"); }
+    if (["quotes", "purchase-requests"].includes(resource)) { const supplier = await one("SELECT id FROM suppliers WHERE id=$1 AND company_id=$2", [num(row.supplierId), companyId]); if (!supplier) add(errors, index, "供应商", "供应商与项目公司不一致"); }
+    if (resource === "purchase-requests") { const sku = await one("SELECT id FROM skus WHERE id=$1 AND project_id=$2", [num(row.skuId), projectId]); if (!sku) add(errors, index, "SKU", "SKU 不属于所选项目"); }
+    if (resource === "invoices" && text(row.direction) === "进项") { const supplier = await one("SELECT id FROM suppliers WHERE id=$1 AND company_id=$2", [num(row.supplierId), companyId]); if (!supplier) add(errors, index, "供应商", "进项发票供应商与项目公司不一致"); }
     if (resource === "receipts" || resource === "payments") {
-      const account = await one("SELECT id,balance_cents FROM company_accounts WHERE id=$1 AND company_id=$2 AND status='active'", [num(row.accountId), companyId]); if (!account) add(errors, index, "账户ID", "账户与业务公司不一致或已停用");
+      const account = await one("SELECT id,balance_cents FROM company_accounts WHERE id=$1 AND company_id=$2 AND status='active'", [num(row.accountId), companyId]); if (!account) add(errors, index, "账户", "账户与业务公司不一致或已停用");
       if (resource === "payments" && account) { const total = (accountPaymentTotals.get(num(row.accountId)) ?? 0) + cents(row.amountYuan); accountPaymentTotals.set(num(row.accountId), total); if (total > Number(account.balance_cents)) add(errors, index, "付款金额(元)", "本批付款合计超过账户余额"); }
     }
 
     if (config) {
-      const value = text(row[config.key]); const localKey = `${config.company ? companyId : "global"}:${value.toLowerCase()}`;
+      const uniqueScope = resource === "skus" ? projectId : config.company ? companyId : "global"; const value = text(row[config.key]); const localKey = `${uniqueScope}:${value.toLowerCase()}`;
       if (seen.has(localKey)) add(errors, index, config.key, "文件内存在重复唯一值"); else seen.add(localKey);
       const params: unknown[] = [value]; let condition = `${config.column}=$1`;
       if (config.company) { params.push(companyId); condition += " AND company_id=$2"; }
+      else if (resource === "skus") { params.push(projectId); condition += " AND project_id=$2"; }
       if (value && await one(`SELECT id FROM ${config.table} WHERE ${condition} LIMIT 1`, params)) add(errors, index, config.key, "数据库中已存在相同唯一值");
     }
   }
   return { errors, sourceHash, companyId: firstCompanyId };
 }
-
 function auditStatement(table: string, resultIndex: number, resource: string, userId: number, hasCompany = true, hasProject = true): TransactionStatement {
   const company = hasCompany ? "company_id" : "id"; const project = hasProject ? "project_id" : "NULL";
   return { query: `INSERT INTO audit_logs(company_id,project_id,user_id,object_type,object_id,action,after,ip) SELECT ${company},${project},$1,$2,id,'IMPORT',to_jsonb(t),'127.0.0.1' FROM ${table} t WHERE id=$3`, params: [userId, resource, { fromResult: resultIndex, key: "id" }] };
 }
-
-export async function importRowsAtomic(resource: ResourceKey, rows: Record<string, unknown>[], filename: string, sourceHash: string, companyId: number | null, user: SessionUser) {
+export async function importRowsAtomic(resource: ResourceKey, rows: Record<string, unknown>[], filename: string, sourceHash: string, companyId: number | null, user: SessionUser, migration?: { batchId: number; stagingRows: MigrationLineageInput[] }) {
   const statements: TransactionStatement[] = []; let firstCompanyResult: TransactionParam | null = null;
   const push = (query: string, params: TransactionParam[], table: string, hasCompany = true, hasProject = true) => { const index = statements.length; statements.push({ query, params }); firstCompanyResult ??= table === "companies" ? { fromResult: index, key: "id" } : null; statements.push(auditStatement(table, index, resource, user.id, hasCompany, hasProject)); return index; };
-  for (const row of rows) {
+  for (const [rowIndex, row] of rows.entries()) {
+    const targetResultIndex = statements.length;
     switch (resource) {
       case "companies": push("INSERT INTO companies(code,name,legal_representative,created_by) VALUES($1,$2,$3,$4) RETURNING id", [text(row.code), text(row.name), text(row.legalRepresentative), user.id], "companies", false, false); break;
       case "accounts": push("INSERT INTO company_accounts(company_id,name,type,bank,last_four,balance_cents,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id", [num(row.companyId), text(row.name), text(row.type), text(row.bank), text(row.lastFour), cents(row.balanceYuan), user.id], "company_accounts", true, false); break;
@@ -95,9 +101,19 @@ export async function importRowsAtomic(resource: ResourceKey, rows: Record<strin
       case "invoices": push("INSERT INTO invoices(company_id,project_id,customer_id,supplier_id,number,direction,type,amount_cents,issued_at,created_by) SELECT company_id,id,CASE WHEN $3='销项' THEN customer_id ELSE NULL END,CASE WHEN $3='进项' THEN $2 ELSE NULL END,$4,$3,$5,$6,$7,$8 FROM projects WHERE id=$1 RETURNING id", [num(row.projectId), row.supplierId ? num(row.supplierId) : null, text(row.direction), text(row.number), text(row.type), cents(row.amountYuan), row.issuedAt, user.id], "invoices"); break;
       default: throw new Error("该类型不支持原子导入");
     }
+    if (migration) {
+      const lineage = migration.stagingRows[rowIndex]; const targetTable = targetTables[resource];
+      if (!lineage || !targetTable) throw new Error("迁移数据血缘信息不完整");
+      const targetId: TransactionParam = { fromResult: targetResultIndex, key: "id" };
+      statements.push(
+        { query: "UPDATE import_staging_rows SET status='IMPORTED',target_table=$1,target_id=$2,updated_at=now() WHERE id=$3", params: [targetTable, targetId, lineage.stagingId] },
+        { query: "INSERT INTO import_data_lineage(batch_id,staging_row_id,target_table,target_id,filename,sheet_name,source_row,raw_data) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)", params: [migration.batchId, lineage.stagingId, targetTable, targetId, lineage.filename, lineage.sheetName, lineage.sourceRow, JSON.stringify(lineage.rawData)] },
+      );
+    }
   }
   const logCompany: TransactionParam = companyId ?? firstCompanyResult ?? (() => { throw new Error("无法确定导入公司"); })();
-  statements.push({ query: "INSERT INTO import_jobs(company_id,user_id,resource,filename,source_hash,total_rows,success_rows,error_rows,status,errors) VALUES($1,$2,$3,$4,$5,$6,$6,0,'已完成','[]'::jsonb)", params: [logCompany, user.id, resource, filename, sourceHash, rows.length] });
+  statements.push({ query: "INSERT INTO import_jobs(company_id,user_id,resource,filename,source_hash,total_rows,success_rows,error_rows,status,errors,migration_batch_id) VALUES($1,$2,$3,$4,$5,$6,$6,0,'已完成','[]'::jsonb,$7)", params: [logCompany, user.id, resource, filename, sourceHash, rows.length, migration?.batchId ?? null] });
+  if (migration) statements.push({ query: "UPDATE import_batches SET status='COMPLETED',success_rows=$1,skipped_rows=(SELECT count(*)::int FROM import_staging_rows WHERE batch_id=$2 AND action<>'CREATE'),completed_at=now(),updated_at=now() WHERE id=$2", params: [rows.length, migration.batchId] });
   await runTransaction(statements);
   return { successRows: rows.length, errorRows: 0, errors: [] as ImportError[] };
 }

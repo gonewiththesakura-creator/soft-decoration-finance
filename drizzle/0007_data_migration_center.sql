@@ -1,0 +1,25 @@
+DO $migration$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = '0007_data_migration_center') THEN
+    CREATE TABLE import_mapping_templates (id serial PRIMARY KEY, company_id integer REFERENCES companies(id), name text NOT NULL, business_type text NOT NULL, sheet_signature text NOT NULL, source_fields jsonb NOT NULL, field_mappings jsonb NOT NULL, transform_rules jsonb NOT NULL DEFAULT '{}'::jsonb, created_by integer NOT NULL REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), updated_by integer);
+    CREATE UNIQUE INDEX import_mapping_template_signature_idx ON import_mapping_templates(company_id, business_type, sheet_signature);
+    CREATE TABLE import_batches (id serial PRIMARY KEY, batch_number text NOT NULL UNIQUE, company_id integer REFERENCES companies(id), user_id integer NOT NULL REFERENCES users(id), mode text NOT NULL DEFAULT 'HISTORY', business_type text, source_hash text NOT NULL, mapping_template_id integer REFERENCES import_mapping_templates(id), total_rows integer NOT NULL DEFAULT 0, ready_rows integer NOT NULL DEFAULT 0, warning_rows integer NOT NULL DEFAULT 0, error_rows integer NOT NULL DEFAULT 0, success_rows integer NOT NULL DEFAULT 0, skipped_rows integer NOT NULL DEFAULT 0, status text NOT NULL DEFAULT 'UPLOADED', error_message text, confirmed_at timestamptz, completed_at timestamptz, rolled_back_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
+    CREATE INDEX import_batches_scope_idx ON import_batches(company_id, created_at DESC);
+    CREATE TABLE import_files (id serial PRIMARY KEY, batch_id integer NOT NULL REFERENCES import_batches(id), filename text NOT NULL, file_size integer NOT NULL, file_hash text NOT NULL, sheet_count integer NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+    CREATE TABLE import_sheets (id serial PRIMARY KEY, batch_id integer NOT NULL REFERENCES import_batches(id), file_id integer NOT NULL REFERENCES import_files(id), sheet_index integer NOT NULL, name text NOT NULL, row_count integer NOT NULL, column_count integer NOT NULL, headers jsonb NOT NULL, preview_rows jsonb NOT NULL, raw_rows jsonb NOT NULL, selected boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(batch_id, sheet_index));
+    CREATE TABLE entity_aliases (id serial PRIMARY KEY, company_id integer NOT NULL REFERENCES companies(id), entity_type text NOT NULL, entity_id integer NOT NULL, alias text NOT NULL, source text NOT NULL DEFAULT 'MANUAL', created_by integer NOT NULL REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(company_id, entity_type, alias));
+    CREATE TABLE import_staging_rows (id serial PRIMARY KEY, batch_id integer NOT NULL REFERENCES import_batches(id), sheet_id integer NOT NULL REFERENCES import_sheets(id), source_row integer NOT NULL, raw_data jsonb NOT NULL, normalized_data jsonb NOT NULL, issues jsonb NOT NULL DEFAULT '[]'::jsonb, duplicate_status text NOT NULL DEFAULT 'NEW', duplicate_target_id integer, action text NOT NULL DEFAULT 'CREATE', status text NOT NULL, target_table text, target_id integer, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), UNIQUE(batch_id, sheet_id, source_row));
+    CREATE INDEX import_staging_batch_status_idx ON import_staging_rows(batch_id, status, source_row);
+    CREATE TABLE import_reference_resolutions (id serial PRIMARY KEY, batch_id integer NOT NULL REFERENCES import_batches(id), staging_row_id integer NOT NULL REFERENCES import_staging_rows(id), field_key text NOT NULL, entity_type text NOT NULL, input_value text NOT NULL, status text NOT NULL, resolved_entity_id integer, candidates jsonb NOT NULL DEFAULT '[]'::jsonb, confirmed_by integer REFERENCES users(id), confirmed_at timestamptz);
+    CREATE INDEX import_resolution_row_idx ON import_reference_resolutions(staging_row_id);
+    CREATE TABLE import_data_lineage (id serial PRIMARY KEY, batch_id integer NOT NULL REFERENCES import_batches(id), staging_row_id integer NOT NULL REFERENCES import_staging_rows(id), target_table text NOT NULL, target_id integer NOT NULL, filename text NOT NULL, sheet_name text NOT NULL, source_row integer NOT NULL, raw_data jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(target_table, target_id));
+    CREATE INDEX import_lineage_batch_idx ON import_data_lineage(batch_id);
+    ALTER TABLE import_jobs ADD COLUMN IF NOT EXISTS migration_batch_id integer REFERENCES import_batches(id);
+    ALTER TABLE skus DROP CONSTRAINT IF EXISTS skus_code_key;
+    CREATE UNIQUE INDEX IF NOT EXISTS skus_project_code_idx ON skus(project_id,code);
+    ALTER TABLE invoices DROP CONSTRAINT IF EXISTS invoices_number_key;
+    CREATE UNIQUE INDEX IF NOT EXISTS invoices_company_number_idx ON invoices(company_id,number);
+    INSERT INTO schema_migrations(version) VALUES ('0007_data_migration_center');
+  END IF;
+END
+$migration$;

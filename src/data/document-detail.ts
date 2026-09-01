@@ -13,6 +13,7 @@ const metadata: Record<DocumentKind, { resource: ResourceKey; objectType: string
   payment: { resource: "payments", objectType: "payment", title: "付款记录", eyebrow: "资金执行单据" },
   contract: { resource: "contracts", objectType: "contract", title: "项目合同", eyebrow: "收入合同" },
 };
+const lineageTables: Record<DocumentKind, string> = { "purchase-request": "purchase_requests", "purchase-order": "purchase_orders", payable: "payables", payment: "payments", contract: "contracts" };
 
 async function authorize(row: Record<string, unknown> | undefined, user: SessionUser) {
   if (!row) return false;
@@ -67,5 +68,6 @@ export async function getDocumentDetail(kind: DocumentKind, id: number, user: Se
     UNION ALL SELECT 'log-'||l.id,CASE l.action WHEN 'CREATE' THEN '创建记录' WHEN 'UPDATE' THEN '更新记录' WHEN 'APPROVE' THEN '审批通过' WHEN 'REJECT' THEN '审批驳回' WHEN 'PAY' THEN '执行付款' WHEN 'VOID' THEN '作废 / 冲销' WHEN 'UPLOAD' THEN '上传附件' ELSE l.action END,COALESCE(u.name,'系统'),l.created_at::text,CASE WHEN l.action IN ('REJECT','VOID') THEN 'danger' WHEN l.action IN ('APPROVE','PAY') THEN 'success' ELSE 'normal' END FROM audit_logs l LEFT JOIN users u ON u.id=l.user_id WHERE l.object_id=$1 AND l.object_type=ANY($4::text[])
     ${eventQuery ? `UNION ALL ${eventQuery}` : ""}
   ) t ORDER BY "happenedAt" DESC`, [id, row!.createdAt ?? row!.orderedAt ?? row!.paidAt ?? row!.signedAt, row!.createdBy ?? null, auditTypes]);
-  return { meta, row: row!, facts, relations: relations.filter(Boolean) as DocumentRelation[], events };
+  const [lineage] = await sqlQuery<{ batchNumber: string; filename: string; sheetName: string; sourceRow: number; rawData: Record<string, unknown> }>(`SELECT b.batch_number AS "batchNumber",l.filename,l.sheet_name AS "sheetName",l.source_row AS "sourceRow",l.raw_data AS "rawData" FROM import_data_lineage l JOIN import_batches b ON b.id=l.batch_id WHERE l.target_table=$1 AND l.target_id=$2`, [lineageTables[kind], id]);
+  return { meta, row: row!, facts, relations: relations.filter(Boolean) as DocumentRelation[], events, lineage: lineage ?? null };
 }

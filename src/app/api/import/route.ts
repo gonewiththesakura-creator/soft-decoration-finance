@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth";
 import { can, type ResourceKey } from "@/lib/permissions";
 import { normalizeRows, validateNormalizedRows } from "@/data/excel";
 import { importRowsAtomic, preflightImport } from "@/data/excel-import";
+import { resolveStandardImportReferences } from "@/data/data-migration";
 
 export async function POST(request: Request) {
   const user = await getSession(); if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 }); if (!can(user, "imports")) return NextResponse.json({ error: "无导入权限" }, { status: 403 });
@@ -12,8 +13,9 @@ export async function POST(request: Request) {
     if (contentType.includes("multipart/form-data")) {
       const form = await request.formData(); const resource = String(form.get("resource") ?? ""); const file = form.get("file"); if (!(file instanceof File)) throw new Error("请选择 Excel 文件"); if (file.size > 8 * 1024 * 1024) throw new Error("文件不能超过 8MB");
       const book = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: false }); const sheet = book.Sheets[book.SheetNames[0]]; const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "", raw: false }); const normalized = normalizeRows(resource, rawRows);
-      const checked = await preflightImport(resource as ResourceKey, normalized.rows, user);
-      return NextResponse.json({ filename: file.name, totalRows: rawRows.length, rows: normalized.rows, sourceHash: checked.sourceHash, errors: [...normalized.errors, ...checked.errors.filter((error) => !normalized.errors.some((existing) => existing.row === error.row && existing.field === error.field && existing.message === error.message))] });
+      const resolved = await resolveStandardImportReferences(resource as ResourceKey, normalized.rows, user); const checked = await preflightImport(resource as ResourceKey, resolved.rows, user);
+      const errors = [...normalized.errors, ...resolved.errors, ...checked.errors]; const uniqueErrors = errors.filter((error, index) => errors.findIndex((existing) => existing.row === error.row && existing.field === error.field && existing.message === error.message) === index);
+      return NextResponse.json({ filename: file.name, totalRows: rawRows.length, rows: resolved.rows, displayRows: rawRows, sourceHash: checked.sourceHash, errors: uniqueErrors });
     }
     const body = await request.json(); const resource = String(body.resource ?? "") as ResourceKey; const rows = Array.isArray(body.rows) ? body.rows as Record<string, unknown>[] : []; const errors = validateNormalizedRows(resource, rows);
     const preflight = await preflightImport(resource, rows, user);

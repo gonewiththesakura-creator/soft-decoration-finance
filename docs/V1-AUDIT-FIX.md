@@ -98,7 +98,7 @@ V1.0 验收清单中的 P0 项和指定 P1 业务已完成代码整改。自动�
 
 ## 最终全新克隆证明
 
-推送后在全新目录克隆公开仓库，依次执行以下命令，并在本节记录提交 SHA 与结果：
+在全新临时目录克隆公开仓库提交 `df96210c1c584de2c583cd8901eee327e81c3c03`，依次执行：
 
 ```text
 npm ci
@@ -108,9 +108,13 @@ npm test
 npm run build
 ```
 
-- 提交：待最终推送后填写。
-- 全新克隆：待最终推送后填写。
-- GitHub Actions：待最终推送后填写。
+- 源码完整性：全新克隆包含 8 个 `src/data` 模块。
+- `npm ci`：通过，安装 391 个依赖包。
+- `npm run typecheck`：通过。
+- `npm run lint`：通过。
+- `npm test`：17/17 通过。
+- `npm run build`：通过，生成 15 个路由入口。
+- GitHub Actions：[CI run 33461758256](https://github.com/gonewiththesakura-creator/soft-decoration-finance/actions/runs/33461758256) 成功。
 
 ## 尚未解决问题
 

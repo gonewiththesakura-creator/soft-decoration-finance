@@ -240,7 +240,7 @@ export async function updateResource(resource: ResourceKey, id: number, body: Re
       if (before.status !== "草稿") throw new Error("仅合同草稿可直接修改，生效合同请作废后创建新版本");
       const [plan] = await sqlQuery<{ id: number }>("SELECT id FROM receivable_plans WHERE contract_id=$1 AND NOT is_void LIMIT 1", [id]);
       if (plan) throw new Error("已生成应收计划的合同不能直接修改");
-      await sqlQuery(`UPDATE contracts SET number=$1,name=$2,amount_cents=$3,signed_at=$4,attachment_url=$5,version=version+1,updated_at=now(),updated_by=$6 WHERE id=$7`, [text(body.number), text(body.name), cents(body.amountYuan), body.signedAt || null, text(body.attachmentUrl) || null, user.id, id]);
+      await sqlQuery(`UPDATE contracts SET number=$1,name=$2,amount_cents=$3,signed_at=$4,attachment_url=COALESCE(NULLIF($5,''),attachment_url),version=version+1,updated_at=now(),updated_by=$6 WHERE id=$7`, [text(body.number), text(body.name), cents(body.amountYuan), body.signedAt || null, text(body.attachmentUrl), user.id, id]);
       break;
     }
     case "receivables":
@@ -249,11 +249,11 @@ export async function updateResource(resource: ResourceKey, id: number, body: Re
       break;
     case "skus":
       if (before.status === "已下单") throw new Error("已下单 SKU 不能直接修改，请走采购变更或退换货");
-      await sqlQuery(`UPDATE skus SET code=$1,room=$2,category=$3,name=$4,brand=$5,quantity=$6,unit=$7,budget_unit_cents=$8,image_url=$9,updated_at=now(),updated_by=$10 WHERE id=$11`, [text(body.code), text(body.room), text(body.category), text(body.name), text(body.brand), decimal(body.quantity), text(body.unit), cents(body.budgetUnitYuan), text(body.imageUrl) || null, user.id, id]);
+      await sqlQuery(`UPDATE skus SET code=$1,room=$2,category=$3,name=$4,brand=$5,quantity=$6,unit=$7,budget_unit_cents=$8,image_url=COALESCE(NULLIF($9,''),image_url),updated_at=now(),updated_by=$10 WHERE id=$11`, [text(body.code), text(body.room), text(body.category), text(body.name), text(body.brand), decimal(body.quantity), text(body.unit), cents(body.budgetUnitYuan), text(body.imageUrl), user.id, id]);
       break;
     case "quotes":
       if (!["待核价", "未选中"].includes(String(before.status))) throw new Error("已选中或已确认报价不能直接修改");
-      await sqlQuery(`UPDATE supplier_quotes SET supplier_id=$1,unit_price_cents=$2,tax_rate_bps=$3,freight_cents=$4,install_cents=$5,lead_days=$6,payment_terms=$7,attachment_url=$8,updated_at=now(),updated_by=$9 WHERE id=$10`, [int(body.supplierId), cents(body.unitPriceYuan), Math.round(Number(body.taxRatePercent) * 100), cents(body.freightYuan), cents(body.installYuan), int(body.leadDays), text(body.paymentTerms), text(body.attachmentUrl) || null, user.id, id]);
+      await sqlQuery(`UPDATE supplier_quotes SET supplier_id=$1,unit_price_cents=$2,tax_rate_bps=$3,freight_cents=$4,install_cents=$5,lead_days=$6,payment_terms=$7,attachment_url=COALESCE(NULLIF($8,''),attachment_url),updated_at=now(),updated_by=$9 WHERE id=$10`, [int(body.supplierId), cents(body.unitPriceYuan), Math.round(Number(body.taxRatePercent) * 100), cents(body.freightYuan), cents(body.installYuan), int(body.leadDays), text(body.paymentTerms), text(body.attachmentUrl), user.id, id]);
       break;
     case "purchase-requests": {
       if (!["草稿", "待审批"].includes(String(before.status))) throw new Error("仅未审批采购申请可直接修改");
@@ -262,7 +262,7 @@ export async function updateResource(resource: ResourceKey, id: number, body: Re
       if (!sku || !supplier) throw new Error("SKU、供应商与申请范围不一致");
       const amount = cents(body.amountYuan);
       await runTransaction([
-        { query: `UPDATE purchase_requests SET supplier_id=$1,number=$2,payment_type=$3,amount_cents=$4,reason=$5,attachment_url=$6,version=version+1,updated_at=now(),updated_by=$7 WHERE id=$8`, params: [supplier.id, text(body.number), text(body.paymentType), amount, text(body.reason), text(body.attachmentUrl) || null, user.id, id] },
+        { query: `UPDATE purchase_requests SET supplier_id=$1,number=$2,payment_type=$3,amount_cents=$4,reason=$5,attachment_url=COALESCE(NULLIF($6,''),attachment_url),version=version+1,updated_at=now(),updated_by=$7 WHERE id=$8`, params: [supplier.id, text(body.number), text(body.paymentType), amount, text(body.reason), text(body.attachmentUrl), user.id, id] },
         { query: `UPDATE purchase_request_items SET sku_id=$1,quantity=$2,unit_price_cents=$3,amount_cents=$4,updated_at=now(),updated_by=$5 WHERE id=(SELECT id FROM purchase_request_items WHERE request_id=$6 ORDER BY id LIMIT 1)`, params: [sku.id, sku.quantity, Math.round(amount / Number(sku.quantity)), amount, user.id, id] },
       ]);
       break;

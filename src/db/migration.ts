@@ -128,4 +128,36 @@ END
 $migration$;
 `;
 
-export const INITIAL_MIGRATION = BASE_SCHEMA + FINANCIAL_NUMERIC_MIGRATION + BUSINESS_ATTACHMENT_MIGRATION + AUTH_SECURITY_MIGRATION + IMPORT_SAFETY_MIGRATION + INVOICE_ALLOCATION_MIGRATION;
+export const ATTACHMENT_SYSTEM_MIGRATION = String.raw`
+DO $migration$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = '0006_attachment_system') THEN
+    CREATE TABLE IF NOT EXISTS attachments (
+      id serial PRIMARY KEY,
+      company_id integer NOT NULL REFERENCES companies(id),
+      project_id integer REFERENCES projects(id),
+      object_type text NOT NULL,
+      object_id integer NOT NULL,
+      category text NOT NULL,
+      filename text NOT NULL,
+      original_filename text NOT NULL,
+      mime_type text NOT NULL,
+      file_size integer NOT NULL CHECK (file_size > 0),
+      storage_key text NOT NULL UNIQUE,
+      url text NOT NULL,
+      uploaded_by integer NOT NULL REFERENCES users(id),
+      is_void boolean NOT NULL DEFAULT false,
+      void_reason text,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      updated_by integer
+    );
+    CREATE INDEX IF NOT EXISTS attachments_object_idx ON attachments(object_type, object_id) WHERE NOT is_void;
+    CREATE INDEX IF NOT EXISTS attachments_company_project_idx ON attachments(company_id, project_id);
+    INSERT INTO schema_migrations(version) VALUES ('0006_attachment_system');
+  END IF;
+END
+$migration$;
+`;
+
+export const INITIAL_MIGRATION = BASE_SCHEMA + FINANCIAL_NUMERIC_MIGRATION + BUSINESS_ATTACHMENT_MIGRATION + AUTH_SECURITY_MIGRATION + IMPORT_SAFETY_MIGRATION + INVOICE_ALLOCATION_MIGRATION + ATTACHMENT_SYSTEM_MIGRATION;

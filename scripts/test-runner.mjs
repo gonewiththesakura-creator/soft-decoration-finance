@@ -6,7 +6,7 @@ import process from "node:process";
 
 const testDir = await mkdtemp(join(tmpdir(), "zhiheng-finance-test-"));
 const testPort = String(32000 + Math.floor(Math.random() * 1000));
-const env = { ...process.env, PGLITE_DATA_DIR: join(testDir, "database"), PGLITE_SERVER_PORT: testPort };
+const env = { ...process.env, PGLITE_DATA_DIR: join(testDir, "database"), PGLITE_SERVER_PORT: testPort, UPLOADS_DIR: join(testDir, "uploads") };
 
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {

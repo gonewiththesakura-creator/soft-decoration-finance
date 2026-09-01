@@ -50,7 +50,7 @@ export async function decidePayment(requestId: number, decision: "approve" | "re
 
 export async function executePayment(requestId: number, user: SessionUser, bankReceiptUrl: string) {
   if (user.role !== "finance") throw new Error("仅财务可以执行付款");
-  if (!bankReceiptUrl.trim()) throw new Error("执行付款前必须填写银行回单 URL");
+  if (!bankReceiptUrl.trim()) throw new Error("执行付款前必须上传银行回单");
   const [request] = await sqlQuery<{ id: number; companyId: number; projectId: number; payableId: number; accountId: number; number: string; amountCents: number; status: string }>(
     `SELECT id,company_id AS "companyId",project_id AS "projectId",payable_id AS "payableId",account_id AS "accountId",number,amount_cents AS "amountCents",status FROM payment_requests WHERE id=$1 AND NOT is_void`, [requestId],
   );

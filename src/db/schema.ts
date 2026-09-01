@@ -464,6 +464,27 @@ export const auditLogs = pgTable("audit_logs", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const attachments = pgTable("attachments", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().references(() => companies.id),
+  projectId: integer("project_id").references(() => projects.id),
+  objectType: text("object_type").notNull(),
+  objectId: integer("object_id").notNull(),
+  category: text("category").notNull(),
+  filename: text("filename").notNull(),
+  originalFilename: text("original_filename").notNull(),
+  mimeType: text("mime_type").notNull(),
+  fileSize: integer("file_size").notNull(),
+  storageKey: text("storage_key").notNull().unique(),
+  url: text("url").notNull(),
+  uploadedBy: integer("uploaded_by").notNull().references(() => users.id),
+  isVoid: boolean("is_void").notNull().default(false),
+  voidReason: text("void_reason"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedBy: integer("updated_by"),
+});
+
 export const loginAttempts = pgTable("login_attempts", {
   id: serial("id").primaryKey(),
   email: text("email").notNull(),

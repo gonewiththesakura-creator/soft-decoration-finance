@@ -4,6 +4,12 @@ import { decidePayment, decidePurchase, executePayment, getPaymentApprovalDetail
 import { createResource, updateResource, voidResource } from "@/data/mutations";
 import { getResourceData } from "@/data/resources";
 import { importRowsAtomic, preflightImport } from "@/data/excel-import";
+import { createAttachment, getAttachmentContent, getAttachments, voidAttachment } from "@/data/attachments";
+import { getDocumentDetail } from "@/data/document-detail";
+import { getFinanceWorkspace } from "@/data/finance-workspace";
+import { getCustomerProfile, getSupplierProfile } from "@/data/partners";
+import { createWorkspacePurchaseRequest, getProcurementWorkspace } from "@/data/procurement-workspace";
+import { getProjectDetail } from "@/data/project-detail";
 import { authenticate } from "@/lib/auth";
 import type { SessionUser } from "@/lib/auth";
 
@@ -121,5 +127,60 @@ describe.sequential("business workflow integration", () => {
     const finance = await financeFor(payable.companyId); const invoice = await createResource("invoices", { direction: "进项", payableId: payable.id, number: `FP-TEST-${Date.now()}`, type: "专票", amountYuan: 1, issuedAt: "2026-09-01" }, finance);
     const [allocation] = await sqlQuery<{ amount: number }>("SELECT amount_cents AS amount FROM invoice_allocations WHERE invoice_id=$1", [invoice.id]);
     expect(allocation.amount).toBe(100);
+  });
+
+  it("builds the project ledger from live contract, procurement and finance facts", async () => {
+    const [project] = await sqlQuery<{ id: number }>("SELECT id FROM projects ORDER BY id LIMIT 1");
+    const detail = await getProjectDetail(project.id, owner);
+    expect(detail).not.toBeNull();
+    expect(detail!.metrics.receivedCents).toBeGreaterThanOrEqual(0);
+    expect(detail!.metrics.orderedCents).toBeGreaterThan(0);
+    expect(detail!.timeline.length).toBeGreaterThan(0);
+    expect(detail!.risks.length).toBeLessThanOrEqual(8);
+  });
+
+  it("creates a purchase request from a selected SKU in the procurement workspace", async () => {
+    const [procurement] = await sqlQuery<{ id: number; companyId: number; name: string; email: string }>(`SELECT id,company_id AS "companyId",name,email FROM users WHERE role='procurement' ORDER BY company_id,id LIMIT 1`);
+    const user: SessionUser = { ...procurement, role: "procurement" }; const workspace = await getProcurementWorkspace(user, procurement.companyId);
+    const row = workspace.rows.find((item) => item.status === "已核价"); expect(row).toBeTruthy();
+    const request = await createWorkspacePurchaseRequest({ skuIds: [Number(row!.id)], paymentType: "对公", reason: "V1.1 工作台集成测试" }, user);
+    const [saved] = await sqlQuery<{ itemCount: number; status: string; logs: number }>(`SELECT (SELECT count(*)::int FROM purchase_request_items WHERE request_id=r.id) AS "itemCount",r.status,(SELECT count(*)::int FROM audit_logs WHERE object_type='purchase_request' AND object_id=r.id AND action='SUBMIT') AS logs FROM purchase_requests r WHERE r.id=$1`, [request.id]);
+    expect(saved.itemCount).toBe(1); expect(saved.status).toBe("待审批"); expect(saved.logs).toBe(1);
+  });
+
+  it("loads company-scoped finance workbench totals without SQL parameter drift", async () => {
+    const finance = await financeFor(1); const data = await getFinanceWorkspace(finance, finance.companyId);
+    expect(Number(data.summary.balance)).toBeGreaterThan(0);
+    expect(data.accounts.every((account) => Number(account.balanceCents) >= 0)).toBe(true);
+    expect(Array.isArray(data.receivables)).toBe(true);
+  });
+
+  it("aggregates customer and supplier profiles from their source documents", async () => {
+    const [customer] = await sqlQuery<{ id: number }>("SELECT customer_id AS id FROM projects ORDER BY id LIMIT 1");
+    const [supplier] = await sqlQuery<{ id: number }>("SELECT supplier_id AS id FROM purchase_orders ORDER BY id LIMIT 1");
+    const customerProfile = await getCustomerProfile(customer.id, owner); const supplierProfile = await getSupplierProfile(supplier.id, owner);
+    expect(customerProfile).not.toBeNull(); expect(customerProfile!.metrics.projectCount).toBeGreaterThan(0);
+    expect(supplierProfile).not.toBeNull(); expect(supplierProfile!.metrics.orderedCents).toBeGreaterThan(0);
+    expect(supplierProfile!.metrics.remainingCents).toBe(supplierProfile!.metrics.payableCents - supplierProfile!.metrics.paidCents);
+  });
+
+  it("returns linked business document details and a real timeline", async () => {
+    const [order] = await sqlQuery<{ id: number }>("SELECT id FROM purchase_orders WHERE NOT is_void ORDER BY id LIMIT 1");
+    const detail = await getDocumentDetail("purchase-order", order.id, owner);
+    expect(detail).not.toBeNull(); expect(detail!.relations.some((item) => item.label === "项目")).toBe(true);
+    expect(detail!.relations.some((item) => item.label === "采购申请")).toBe(true); expect(detail!.events.length).toBeGreaterThan(0);
+  });
+
+  it("stores attachments, enforces metadata, reads content and preserves void audit", async () => {
+    const [project] = await sqlQuery<{ id: number }>("SELECT id FROM projects ORDER BY id LIMIT 1");
+    const file = new File(["V1.1 attachment evidence"], "验收凭证.pdf", { type: "application/pdf" });
+    const created = await createAttachment({ objectType: "project", objectId: project.id, category: "合同", file }, owner);
+    const listed = await getAttachments("project", project.id, owner); expect(listed.some((item) => item.id === created.id)).toBe(true);
+    const content = await getAttachmentContent(created.id, owner); expect(content.buffer.toString("utf8")).toBe("V1.1 attachment evidence");
+    await voidAttachment(created.id, "集成测试作废", owner);
+    const [record] = await sqlQuery<{ isVoid: boolean; logs: number }>(`SELECT is_void AS "isVoid",(SELECT count(*)::int FROM audit_logs WHERE object_type='attachment' AND object_id=$1 AND action='VOID') AS logs FROM attachments WHERE id=$1`, [created.id]);
+    expect(record.isVoid).toBe(true); expect(record.logs).toBe(1); await expect(getAttachmentContent(created.id, owner)).rejects.toThrow("已作废");
+    const [designer] = await sqlQuery<{ id: number; companyId: number; name: string; email: string }>(`SELECT u.id,u.company_id AS "companyId",u.name,u.email FROM users u JOIN project_members pm ON pm.user_id=u.id WHERE pm.project_id=$1 AND u.role='designer' LIMIT 1`, [project.id]);
+    await expect(createAttachment({ objectType: "project", objectId: project.id, category: "其他", file }, { ...designer, role: "designer" })).rejects.toThrow("FORBIDDEN");
   });
 });

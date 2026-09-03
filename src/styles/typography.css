@@ -1,0 +1,23 @@
+body {
+  font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+  letter-spacing: 0;
+}
+.type-display {
+  font-family: "Songti SC", "STSong", Georgia, serif;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.type-heading { font-size: 22px; font-weight: 700; line-height: 1.3; }
+.type-section { font-size: 15px; font-weight: 700; line-height: 1.4; }
+.type-body { font-size: 13px; line-height: 1.65; }
+.type-caption { font-size: 11px; line-height: 1.5; color: var(--muted); }
+.type-financial,
+.money,
+.metric-value,
+.financial-value {
+  font-family: "DIN Alternate", "Roboto Mono", "SFMono-Regular", Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}

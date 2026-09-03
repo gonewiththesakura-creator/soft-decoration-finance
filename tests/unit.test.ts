@@ -4,6 +4,8 @@ import { normalizeRows } from "@/data/excel";
 import { formatMoney } from "@/lib/format";
 import type { SessionUser } from "@/lib/auth";
 import { applyFieldMapping, parseAmount, parseBooleanValue, parseExcelDate, parseQuantity, parseRatio, suggestFieldMappings } from "@/data/data-migration-rules";
+import { buildCashflowForecast, groupCashflowByWeek, projectedBalance } from "@/data/analytics/cashflow";
+import { calculateProjectHealth } from "@/data/analytics/health";
 
 const finance: SessionUser = { id: 2, companyId: 1, name: "财务", email: "finance@test", role: "finance" };
 const designer: SessionUser = { id: 3, companyId: 1, name: "设计", email: "designer@test", role: "designer" };
@@ -74,4 +76,24 @@ describe("data migration deterministic rules", () => {
 
 it("formats integer cents without floating point leakage", () => {
   expect(formatMoney(123456)).toBe("¥1,234.56");
+});
+
+describe("operating analytics", () => {
+  it("builds a deterministic cumulative cash forecast", () => {
+    const forecast = buildCashflowForecast(1_000_000, [
+      { date: "2026-09-03", receivableCents: 300_000, payableCents: 100_000 },
+      { date: "2026-09-04", receivableCents: 0, payableCents: 1_500_000 },
+    ]);
+    expect(forecast.map((row) => row.balanceCents)).toEqual([1_200_000, -300_000]);
+    expect(projectedBalance(forecast, 7, 1_000_000)).toBe(-300_000);
+    expect(groupCashflowByWeek(forecast)[0]).toMatchObject({ receivableCents: 300_000, payableCents: 1_600_000 });
+  });
+
+  it("scores budget, collection, overdue, invoice and funding risks", () => {
+    const healthy = calculateProjectHealth({ contractCents: 10_000_000, budgetCents: 5_000_000, receivedCents: 8_000_000, orderedCents: 4_800_000, payableCents: 4_000_000, paidCents: 3_000_000, purchaseInvoicedCents: 4_000_000, overdueReceivableCents: 0 });
+    const risky = calculateProjectHealth({ contractCents: 10_000_000, budgetCents: 5_000_000, receivedCents: 1_000_000, orderedCents: 7_500_000, payableCents: 7_000_000, paidCents: 4_000_000, purchaseInvoicedCents: 1_000_000, overdueReceivableCents: 3_000_000 });
+    expect(healthy).toMatchObject({ score: 100, tone: "healthy" });
+    expect(risky.score).toBeLessThan(60);
+    expect(risky.reasons).toEqual(expect.arrayContaining(["回款率偏低", "采购已超预算", "存在逾期应收", "进项发票覆盖不足", "项目现金净额为负"]));
+  });
 });

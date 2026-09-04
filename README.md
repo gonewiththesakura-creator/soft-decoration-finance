@@ -14,7 +14,7 @@
 - 项目经营总账、质保金独立状态、预算版本、退货冲减及操作日志
 - 老板首页六项核心指标与未来 30 天现金流
 - 数据迁移中心：日常标准导入、历史多 Sheet、字段 Mapping、名称解析、暂存预检、批次血缘和安全撤销
-- 只读 AI Query Service，回答逾期、超预算、欠票、应收应付和资金缺口
+- Real AI Core：OpenAI-compatible Provider、24 个只读业务工具、多轮对话、全局 Copilot、页面上下文分析与完整运行审计
 
 ## 技术架构
 
@@ -73,6 +73,8 @@ npm start            # 数据库服务 + 生产服务器
 npm test             # 临时隔离数据库上的单元与集成测试
 npm run typecheck    # TypeScript 检查
 npm run lint         # ESLint
+npm run ai:compat    # 完整 Provider 八项兼容性测试（需要服务端密钥）
+npm run ai:smoke     # AI 真实连接、工具、流式与结构化输出烟测
 npm run db:seed      # 初始化关联演示数据
 npm run db:reset     # 清空并重建本地 Schema（先停止应用）
 npm run templates:generate # 重新生成标准模板和 5 套迁移测试工作簿
@@ -86,7 +88,8 @@ Seed 包含 3 家公司、6 个公司账户、22 个用户、24 个客户、48 �
 
 ```text
 src/app/                 页面、API 与 Server Actions
-src/data/                聚合查询、业务写入、审批、AI 与 Excel 服务
+src/ai/                  Provider、角色提示词、工具注册、编排、会话与审计
+src/data/                聚合查询、业务写入、审批与 Excel 服务
 src/db/                  Drizzle Schema、迁移与数据库客户端
 src/lib/                 登录、权限、审计和格式化
 scripts/                 Seed、重置、数据库服务和测试启动器
@@ -106,6 +109,10 @@ docs/                    权限、测试、部署与版本状态
 - [部署说明](docs/DEPLOYMENT.md)
 - [Windows 运行稳定性](docs/RUNTIME-STABILITY.md)
 - [数据迁移中心](docs/DATA-MIGRATION.md)
+- [AI 架构](docs/AI-ARCHITECTURE.md)
+- [AI Provider 兼容性](docs/AI-PROVIDER-COMPATIBILITY.md)
+- [AI 工具清单](docs/AI-TOOLS.md)
+- [AI 安全边界](docs/AI-SECURITY.md)
 - [完成情况、已知问题与二期建议](docs/STATUS.md)
 
 ## 数据备份

@@ -5,6 +5,7 @@ import { FinanceWorkspace } from "@/components/finance-workspace";
 import { CashflowAreaChart } from "@/components/charts/cashflow-area-chart";
 import { ReceivableAgingChart, PayableMaturityChart } from "@/components/charts/aging-chart";
 import { MetricCountUp } from "@/components/charts/metric-count-up";
+import { AIInsightPanel } from "@/components/ai-insight-panel";
 import { getFinanceWorkspace } from "@/data/finance-workspace";
 import { getFinanceAnalytics } from "@/data/analytics/finance";
 import { getCompanyScope, requireSession } from "@/lib/auth";
@@ -24,6 +25,8 @@ export default async function FinanceWorkspacePage() {
 
   return <main className="content operating-page finance-os os-page-enter">
     <header className="operating-heading"><div><div className="eyebrow">财务执行 · 资金优先</div><h1>财务工作台</h1><p className="page-description">先判断资金趋势和到期压力，再进入今日执行队列。</p></div><div className="heading-actions"><Link className="button" href="/accounts"><CircleDollarSign />资金账户</Link><Link className="button primary" href="/receipts?new=1"><Banknote />登记收款</Link></div></header>
+
+    <AIInsightPanel eyebrow="Finance AI" title="资金与到期风险分析" description="基于当前公司范围复核未来 30 天现金流、逾期应收和近期应付。" prompt="请分析当前财务工作台：先读取 30 天现金流、逾期应收和未来 7 天应付，指出最紧迫的资金风险、数据依据和人工处理建议。" pageContext={{ pathname: "/finance-workspace", pageType: "finance_workspace" }} />
 
     <div className="finance-command-grid">
       <section className="os-section finance-cash-section">

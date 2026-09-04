@@ -28,13 +28,16 @@ export async function getDashboardData(user: SessionUser, scope: number | null) 
 
   const [summary] = await sqlQuery<{
     balance: number; receivable30: number; payable30: number; pendingPurchases: number;
-    pendingPayments: number; activeProjects: number; overdueReceivables: number; missingInvoice: number;
+    pendingPurchaseCents: number; pendingPayments: number; pendingPaymentCents: number;
+    activeProjects: number; overdueReceivables: number; missingInvoice: number;
   }>(`SELECT
     (SELECT COALESCE(sum(a.balance_cents),0)::float8 FROM company_accounts a WHERE ${accountCondition} AND a.status='active') AS balance,
     (SELECT COALESCE(sum(rp.amount_cents-rp.received_cents),0)::float8 FROM receivable_plans rp WHERE ${planCondition} AND NOT rp.is_void AND NOT rp.is_warranty AND rp.due_date BETWEEN now() AND now()+interval '30 day') AS "receivable30",
     (SELECT COALESCE(sum(y.amount_cents-y.paid_cents),0)::float8 FROM payables y WHERE ${payableCondition} AND NOT y.is_void AND y.due_date BETWEEN now() AND now()+interval '30 day') AS "payable30",
     (SELECT count(*)::int FROM purchase_requests r WHERE ${requestCondition} AND NOT r.is_void AND r.status='待审批') AS "pendingPurchases",
+    (SELECT COALESCE(sum(r.amount_cents),0)::float8 FROM purchase_requests r WHERE ${requestCondition} AND NOT r.is_void AND r.status='待审批') AS "pendingPurchaseCents",
     (SELECT count(*)::int FROM payment_requests r WHERE ${requestCondition} AND NOT r.is_void AND r.status='待审批') AS "pendingPayments",
+    (SELECT COALESCE(sum(r.amount_cents),0)::float8 FROM payment_requests r WHERE ${requestCondition} AND NOT r.is_void AND r.status='待审批') AS "pendingPaymentCents",
     (SELECT count(*)::int FROM projects p WHERE ${projectCondition} AND p.status IN ('待启动','执行中','待验收','待审计','待质保关闭')) AS "activeProjects",
     (SELECT COALESCE(sum(rp.amount_cents-rp.received_cents),0)::float8 FROM receivable_plans rp WHERE ${planCondition} AND NOT rp.is_void AND NOT rp.is_warranty AND rp.due_date < now() AND rp.received_cents < rp.amount_cents) AS "overdueReceivables",
     (SELECT COALESCE(sum(GREATEST(y.amount_cents-COALESCE((SELECT sum(ia.amount_cents) FROM invoice_allocations ia WHERE ia.payable_id=y.id),0),0)),0)::float8 FROM payables y WHERE ${payableCondition} AND NOT y.is_void) AS "missingInvoice"`, summaryParams);

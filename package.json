@@ -17,6 +17,8 @@
     "db:seed": "tsx scripts/seed.ts",
     "db:reset": "tsx scripts/reset-db.ts",
     "db:server": "tsx scripts/db-server.ts",
+    "ai:compat": "tsx scripts/ai-provider-compatibility.ts",
+    "ai:smoke": "npm run ai:compat",
     "templates:generate": "tsx scripts/generate-standard-template.ts && node scripts/generate-migration-fixtures.mjs"
   },
   "dependencies": {

@@ -205,4 +205,76 @@ END
 $migration$;
 `;
 
-export const INITIAL_MIGRATION = BASE_SCHEMA + FINANCIAL_NUMERIC_MIGRATION + BUSINESS_ATTACHMENT_MIGRATION + AUTH_SECURITY_MIGRATION + IMPORT_SAFETY_MIGRATION + INVOICE_ALLOCATION_MIGRATION + ATTACHMENT_SYSTEM_MIGRATION + DATA_MIGRATION_CENTER_MIGRATION + IMPORT_SCOPE_MIGRATION;
+export const AI_CORE_MIGRATION = String.raw`
+DO $migration$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = '0009_ai_core') THEN
+    CREATE TABLE ai_conversations (
+      id serial PRIMARY KEY,
+      user_id integer NOT NULL REFERENCES users(id),
+      company_id integer REFERENCES companies(id),
+      title text NOT NULL,
+      page_context jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX ai_conversations_user_idx ON ai_conversations(user_id, updated_at DESC);
+    CREATE TABLE ai_messages (
+      id serial PRIMARY KEY,
+      conversation_id integer NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+      role text NOT NULL,
+      content text NOT NULL,
+      structured_response jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      CHECK (role IN ('user','assistant'))
+    );
+    CREATE INDEX ai_messages_conversation_idx ON ai_messages(conversation_id, created_at);
+    CREATE TABLE ai_runs (
+      id serial PRIMARY KEY,
+      conversation_id integer NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+      user_id integer NOT NULL REFERENCES users(id),
+      company_id integer REFERENCES companies(id),
+      provider text NOT NULL,
+      model text NOT NULL,
+      api_mode text,
+      status text NOT NULL,
+      input_tokens integer,
+      output_tokens integer,
+      total_tokens integer,
+      latency_ms integer,
+      error_code text,
+      started_at timestamptz NOT NULL DEFAULT now(),
+      finished_at timestamptz
+    );
+    CREATE INDEX ai_runs_user_idx ON ai_runs(user_id, started_at DESC);
+    CREATE TABLE ai_tool_calls (
+      id serial PRIMARY KEY,
+      ai_run_id integer NOT NULL REFERENCES ai_runs(id) ON DELETE CASCADE,
+      tool_name text NOT NULL,
+      arguments jsonb NOT NULL DEFAULT '{}'::jsonb,
+      result_summary text,
+      duration_ms integer NOT NULL DEFAULT 0,
+      success boolean NOT NULL DEFAULT false,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX ai_tool_calls_run_idx ON ai_tool_calls(ai_run_id, created_at);
+    CREATE TABLE ai_provider_checks (
+      id serial PRIMARY KEY,
+      user_id integer NOT NULL REFERENCES users(id),
+      provider text NOT NULL,
+      base_url text NOT NULL,
+      primary_model text NOT NULL,
+      fast_model text NOT NULL,
+      api_mode text,
+      status text NOT NULL,
+      latency_ms integer,
+      error_code text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    INSERT INTO schema_migrations(version) VALUES ('0009_ai_core');
+  END IF;
+END
+$migration$;
+`;
+
+export const INITIAL_MIGRATION = BASE_SCHEMA + FINANCIAL_NUMERIC_MIGRATION + BUSINESS_ATTACHMENT_MIGRATION + AUTH_SECURITY_MIGRATION + IMPORT_SAFETY_MIGRATION + INVOICE_ALLOCATION_MIGRATION + ATTACHMENT_SYSTEM_MIGRATION + DATA_MIGRATION_CENTER_MIGRATION + IMPORT_SCOPE_MIGRATION + AI_CORE_MIGRATION;

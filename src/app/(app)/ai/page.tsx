@@ -5,5 +5,5 @@ import { AiAssistant } from "@/components/ai-assistant";
 
 export default async function AiPage() {
   const user = await requireSession(); if (!can(user, "ai")) notFound();
-  return <main className="content"><div className="page-heading"><div><div className="eyebrow">只读分析</div><h1>AI 财务助手</h1><p className="page-description">基于当前权限范围内的结构化业务数据，给出金额、依据和建议动作。</p></div></div><AiAssistant /></main>;
+  return <main className="content ai-page"><div className="page-heading"><div><div className="eyebrow">REAL AI CORE · 只读分析</div><h1>AI 经营助手</h1><p className="page-description">通过授权业务工具读取实时数据，保留多轮历史、数据依据与运行审计。</p></div></div><AiAssistant role={user.role} pageContext={{ pathname: "/ai", pageType: "ai_workspace" }} /></main>;
 }

@@ -14,6 +14,7 @@ import { ProjectCashCurve } from "@/components/charts/project-cash-curve";
 import { MetricCountUp } from "@/components/charts/metric-count-up";
 import { SimpleTable } from "@/components/simple-table";
 import { AttachmentPanel } from "@/components/attachment-panel";
+import { AIInsightPanel } from "@/components/ai-insight-panel";
 
 export default async function ProjectDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string }> }) {
   const [{ id }, query, user] = await Promise.all([params, searchParams, requireSession()]);
@@ -49,6 +50,7 @@ export default async function ProjectDetailPage({ params, searchParams }: { para
       <div className="project-identity"><div className="project-code">{project.code}</div><h1 className="project-name">{project.name}</h1><div className="project-meta"><span><Building2 />{project.companyName}</span><Link href={`/customers/${project.customerId}`}><UserRound />{project.customerName}</Link><span><UserRound />项目经理 {project.managerName}</span><span><UserRound />设计师 {project.designerName}</span><span><CalendarDays />{formatDate(project.startDate)} 至 {formatDate(project.expectedEndDate)}</span><span><MapPin />{project.address || "未填写地址"}</span></div></div>
       <div className="project-command-status"><span className={`badge ${getStatusTone(project.status)}`}>{project.status}</span><div className={`health-score ${health.tone}`}><div><span>经营健康分</span><strong>{health.score}</strong><small>/ 100</small></div><b>{health.label}</b></div><p>{health.reasons[0] ?? "当前关键经营指标稳定"}</p></div>
     </header>
+    <AIInsightPanel eyebrow="Project AI" title="项目经营复盘" description="结合项目摘要、采购进度和当前角色可见数据，定位需要优先处理的事项。" prompt="请分析这个项目当前最需要关注的经营问题。必须先读取项目摘要和采购管线；如当前角色有权限，再读取项目健康与资金曲线。输出数据依据和人工处理建议。" pageContext={{ pathname: `/projects/${projectId}`, pageType: "project", projectId }} />
     <nav className="tabs project-tabs" aria-label="项目详情导航">{projectTabs.map(([key, label]) => <Link key={key} href={`/projects/${projectId}?tab=${key}`} className={`tab ${tab === key ? "active" : ""}`}>{label}</Link>)}</nav>
 
     {tab === "overview" && analytics ? <>

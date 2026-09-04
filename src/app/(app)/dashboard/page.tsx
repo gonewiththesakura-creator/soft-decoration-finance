@@ -8,6 +8,7 @@ import { CashflowBarChart } from "@/components/charts/cashflow-bar-chart";
 import { CompanyFundsDonut } from "@/components/charts/donut-chart";
 import { ProjectHealthChart } from "@/components/charts/project-health-chart";
 import { MetricCountUp } from "@/components/charts/metric-count-up";
+import { AIInsightPanel } from "@/components/ai-insight-panel";
 import { formatDate, formatMoney, getStatusTone } from "@/lib/format";
 
 export default async function DashboardPage() {
@@ -32,6 +33,8 @@ export default async function DashboardPage() {
       <div><div className="eyebrow">经营驾驶舱 · 未来 30 天</div><h1>{user.name}，先看资金与需要处理的事</h1><p className="page-description">经营结论、风险和行动均来自当前权限范围内的实时业务数据。</p></div>
       <div className="heading-actions"><Link className="button" href="/projects"><FolderKanban />项目总账</Link><Link className="button primary" href={approvalHref}><CheckSquare2 />处理审批</Link></div>
     </header>
+
+    {["owner", "finance", "project_manager"].includes(user.role) ? <AIInsightPanel eyebrow="Daily Brief" title="今日经营简报" description="让 AI 汇总现金、回款、付款、审批与项目健康，并给出今天的处理顺序。" prompt="请生成今日经营简报。必须先读取经营驾驶舱数据，按资金、回款、付款、审批、项目风险给出有数据依据的处理优先级。" pageContext={{ pathname: "/dashboard", pageType: "dashboard" }} /> : null}
 
     <div className="dashboard-command-grid">
       <section className="os-section cashflow-command">

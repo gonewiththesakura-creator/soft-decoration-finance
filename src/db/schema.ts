@@ -639,4 +639,66 @@ export const aiQueries = pgTable("ai_queries", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const aiConversations = pgTable("ai_conversations", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id),
+  companyId: integer("company_id").references(() => companies.id),
+  title: text("title").notNull(),
+  pageContext: jsonb("page_context").notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const aiMessages = pgTable("ai_messages", {
+  id: serial("id").primaryKey(),
+  conversationId: integer("conversation_id").notNull().references(() => aiConversations.id),
+  role: text("role").notNull(),
+  content: text("content").notNull(),
+  structuredResponse: jsonb("structured_response"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const aiRuns = pgTable("ai_runs", {
+  id: serial("id").primaryKey(),
+  conversationId: integer("conversation_id").notNull().references(() => aiConversations.id),
+  userId: integer("user_id").notNull().references(() => users.id),
+  companyId: integer("company_id").references(() => companies.id),
+  provider: text("provider").notNull(),
+  model: text("model").notNull(),
+  apiMode: text("api_mode"),
+  status: text("status").notNull(),
+  inputTokens: integer("input_tokens"),
+  outputTokens: integer("output_tokens"),
+  totalTokens: integer("total_tokens"),
+  latencyMs: integer("latency_ms"),
+  errorCode: text("error_code"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+});
+
+export const aiToolCalls = pgTable("ai_tool_calls", {
+  id: serial("id").primaryKey(),
+  aiRunId: integer("ai_run_id").notNull().references(() => aiRuns.id),
+  toolName: text("tool_name").notNull(),
+  arguments: jsonb("arguments").notNull().default({}),
+  resultSummary: text("result_summary"),
+  durationMs: integer("duration_ms").notNull().default(0),
+  success: boolean("success").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const aiProviderChecks = pgTable("ai_provider_checks", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id),
+  provider: text("provider").notNull(),
+  baseUrl: text("base_url").notNull(),
+  primaryModel: text("primary_model").notNull(),
+  fastModel: text("fast_model").notNull(),
+  apiMode: text("api_mode"),
+  status: text("status").notNull(),
+  latencyMs: integer("latency_ms"),
+  errorCode: text("error_code"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type UserRole = "owner" | "finance" | "procurement" | "project_manager" | "designer";

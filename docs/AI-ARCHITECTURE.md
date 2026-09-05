@@ -7,7 +7,8 @@
 3. The model may select only tools registered for the current role. Each selected tool repeats company, permission and project-membership checks before reading data.
 4. Search tools may continue into a bounded lookup loop (maximum eight turns). Once business data is resolved, tool results are normalized into a fresh fast-model synthesis request as untrusted data. This avoids relying on vendor-specific tool-continuation behavior.
 5. The final answer must match the business response JSON Schema. Invalid JSON receives one repair attempt with the fast model.
-6. The API streams business statuses and one final structured response. Conversations, messages, runs and tool-call summaries are written to audit tables.
+6. The Numeric Grounding Guard checks final money, percentages, counts and dates against Authorized Facts extracted from tool results before the response is saved or displayed.
+7. The API streams business statuses and one final structured response. Conversations, messages, full-run usage and bounded tool-call summaries are written to audit tables.
 
 ## Provider Adapter
 
@@ -32,6 +33,6 @@ The application does not contact the provider during startup or page rendering. 
 - Global Copilot: route-aware drawer available from the top bar.
 - Dashboard Daily Brief, Project AI and Finance AI: explicit on-demand analysis panels.
 - Payment Risk Review: read-only review inside the payment approval detail.
-- `/ai/settings`: owner-only provider status and connection-test history.
+- `/ai/settings`: owner-only provider status, connection history and daily AI Operations metrics.
 
 The V1.0 keyword service is retained as `legacy-rule-engine.ts`. It is used only after a real provider failure, only for its narrow supported questions, and every such answer is marked `degraded`.

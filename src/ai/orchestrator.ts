@@ -1,10 +1,11 @@
 import { getAIConfig } from "./config";
+import { applyNumericGrounding } from "./grounding";
 import { buildSystemPrompt } from "./prompts";
 import { AIProviderError } from "./providers/openai-compatible";
 import { getAIProvider } from "./providers/provider";
-import type { AIProvider, AIProviderResponse } from "./providers/types";
+import type { AIProvider, AIProviderRequest, AIProviderResponse } from "./providers/types";
 import { aiResponseJSONSchema, mergeEvidence, parseAIResponse, type AIStructuredResponse } from "./response";
-import { assertConversation, conversationItems, createConversation, finishRun, logToolCall, saveMessage, startRun } from "./storage";
+import { assertConversation, conversationItems, createConversation, finishRun, logToolCall, saveMessage, startRun, type AIRunUsage } from "./storage";
 import { executeAITool, getAIToolsForRole, toolStatus } from "./tools/registry";
 import type { AIEvidence, AIPageContext } from "./tools/types";
 import { answerFinancialQuestion, canLegacyHandle } from "@/data/legacy-rule-engine";
@@ -37,9 +38,9 @@ function legacyResponse(answer: Awaited<ReturnType<typeof answerFinancialQuestio
   };
 }
 
-async function repairResponse(raw: string, provider: AIProvider, signal?: AbortSignal) {
+async function repairResponse(raw: string, generate: (request: AIProviderRequest) => Promise<AIProviderResponse>, signal?: AbortSignal) {
   const config = getAIConfig();
-  const repair = await provider.generate({
+  const repair = await generate({
     model: config.fastModel,
     instructions: "把输入修复成符合给定 JSON Schema 的对象。保留原意，不增加新事实，只输出 JSON。",
     input: [{ type: "message", role: "user", content: raw.slice(0, 12_000) }],
@@ -80,6 +81,22 @@ export async function runAI(input: AIRunInput): Promise<AIRunResult> {
   const runStarted = Date.now();
   const runId = await startRun(conversation.id, input.user, input.companyScope, config.provider, config.primaryModel);
   let latestProviderResponse: AIProviderResponse | undefined;
+  const usage: AIRunUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, primaryCalls: 0, fastCalls: 0, fallbackCount: 0 };
+
+  const observe = (response: AIProviderResponse) => {
+    usage.inputTokens += Number(response.usage?.inputTokens ?? 0);
+    usage.outputTokens += Number(response.usage?.outputTokens ?? 0);
+    usage.totalTokens += Number(response.usage?.totalTokens ?? (Number(response.usage?.inputTokens ?? 0) + Number(response.usage?.outputTokens ?? 0)));
+    return response;
+  };
+  const stream = async (request: AIProviderRequest, tier: "primary" | "fast") => {
+    if (tier === "primary") usage.primaryCalls += 1; else usage.fastCalls += 1;
+    return observe(await provider.stream(request));
+  };
+  const generate = async (request: AIProviderRequest, tier: "primary" | "fast") => {
+    if (tier === "primary") usage.primaryCalls += 1; else usage.fastCalls += 1;
+    return observe(await provider.generate(request));
+  };
 
   try {
     const items = await conversationItems(conversation.id);
@@ -92,27 +109,28 @@ export async function runAI(input: AIRunInput): Promise<AIRunResult> {
     const complete = async (providerResponse: AIProviderResponse) => {
       input.onStatus?.("正在整理结论与证据...");
       const parsed = parseAIResponse(providerResponse.text);
-      const response = parsed.success ? parsed.data : await repairResponse(providerResponse.text, provider, input.signal);
+      const response = parsed.success ? parsed.data : await repairResponse(providerResponse.text, (request) => generate(request, "fast"), input.signal);
       const merged = {
         ...mergeEvidence(response, accumulatedEvidence),
         degraded: false,
         notice: "本分析仅基于当前授权范围内的只读业务数据；不会执行审批、付款、记账或其他写入操作。",
         suggestedActions: safeSuggestedActions(response.suggestedActions),
       };
-      await saveMessage(conversation.id, "assistant", merged.summary, merged);
-      await finishRun(runId, "completed", runStarted, providerResponse);
-      return { conversationId: conversation.id, response: merged };
+      const grounded = applyNumericGrounding(merged, synthesisResults).response;
+      await saveMessage(conversation.id, "assistant", grounded.summary, grounded);
+      await finishRun(runId, "completed", runStarted, providerResponse, undefined, usage);
+      return { conversationId: conversation.id, response: grounded };
     };
 
     for (let step = 0; step < 8; step += 1) {
-      latestProviderResponse = await provider.stream({
+      latestProviderResponse = await stream({
         model: config.primaryModel,
         instructions: buildSystemPrompt(input.user, input.pageContext),
         input: items,
         tools: step < 7 ? tools.map((tool) => tool.definition) : undefined,
         responseSchema: { name: "ai_business_response", schema: aiResponseJSONSchema },
         signal: input.signal,
-      });
+      }, "primary");
 
       if (!latestProviderResponse.toolCalls.length) {
         return complete(latestProviderResponse);
@@ -153,12 +171,13 @@ export async function runAI(input: AIRunInput): Promise<AIRunResult> {
         signal: input.signal,
       } satisfies Parameters<AIProvider["stream"]>[0];
       try {
-        latestProviderResponse = await provider.stream(synthesisRequest);
+        latestProviderResponse = await stream(synthesisRequest, "fast");
       } catch (error) {
         const canUsePrimary = error instanceof AIProviderError && error.retryable && config.primaryModel !== config.fastModel;
         if (!canUsePrimary) throw error;
         input.onStatus?.("快速模型繁忙，正在由主模型完成分析...");
-        latestProviderResponse = await provider.stream({ ...synthesisRequest, model: config.primaryModel });
+        usage.fallbackCount += 1;
+        latestProviderResponse = await stream({ ...synthesisRequest, model: config.primaryModel }, "primary");
       }
       return complete(latestProviderResponse);
     }
@@ -170,10 +189,10 @@ export async function runAI(input: AIRunInput): Promise<AIRunResult> {
       input.onStatus?.("实时模型不可用，正在使用受限只读分析...");
       const fallback = legacyResponse(await answerFinancialQuestion(question, input.user, input.companyScope));
       await saveMessage(conversation.id, "assistant", fallback.summary, fallback);
-      await finishRun(runId, "degraded", runStarted, latestProviderResponse, errorCode);
+      await finishRun(runId, "degraded", runStarted, latestProviderResponse, errorCode, usage);
       return { conversationId: conversation.id, response: fallback };
     }
-    await finishRun(runId, cancelled ? "cancelled" : "failed", runStarted, latestProviderResponse, errorCode);
+    await finishRun(runId, cancelled ? "cancelled" : "failed", runStarted, latestProviderResponse, errorCode, usage);
     throw error;
   }
 }

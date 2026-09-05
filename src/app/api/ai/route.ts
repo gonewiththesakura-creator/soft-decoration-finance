@@ -1,5 +1,6 @@
 import { runAI } from "@/ai/orchestrator";
 import { beginAIRun, finishActiveAIRun } from "@/ai/run-registry";
+import { AIRateLimitError, assertAIRateLimit } from "@/ai/rate-limit";
 import type { AIPageContext } from "@/ai/tools/types";
 import { getCompanyScope, getSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
@@ -34,20 +35,19 @@ export async function POST(request: Request) {
   const user = await getSession();
   if (!user) return Response.json({ error: "请先登录" }, { status: 401 });
   if (!can(user, "ai")) return Response.json({ error: "无权使用 AI 查询" }, { status: 403 });
-  const active = beginAIRun(user.id);
-  if (!active) return Response.json({ error: "已有一项 AI 分析正在运行，请先等待或取消" }, { status: 409 });
 
   let body: { question?: unknown; conversationId?: unknown; pageContext?: unknown };
   try { body = await request.json() as typeof body; }
-  catch {
-    finishActiveAIRun(user.id, active.controller);
-    return Response.json({ error: "请求格式无效" }, { status: 400 });
-  }
+  catch { return Response.json({ error: "请求格式无效" }, { status: 400 }); }
   const question = String(body.question ?? "").trim().slice(0, 2_000);
-  if (!question) {
-    finishActiveAIRun(user.id, active.controller);
-    return Response.json({ error: "请输入问题" }, { status: 400 });
+  if (!question) return Response.json({ error: "请输入问题" }, { status: 400 });
+  try { await assertAIRateLimit(user); }
+  catch (error) {
+    if (error instanceof AIRateLimitError) return Response.json({ error: error.message, code: error.code }, { status: 429, headers: { "Retry-After": String(error.retryAfterSeconds) } });
+    throw error;
   }
+  const active = beginAIRun(user.id);
+  if (!active) return Response.json({ error: "已有一项 AI 分析正在运行，请先等待或取消" }, { status: 409 });
   const conversationId = Number(body.conversationId);
   const scope = await getCompanyScope(user);
   const encoder = new TextEncoder();

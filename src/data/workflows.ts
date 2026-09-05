@@ -2,6 +2,7 @@ import { runTransaction, sqlQuery, type TransactionStatement } from "@/db/client
 import type { SessionUser } from "@/lib/auth";
 import { writeAudit } from "@/lib/audit";
 import { assertCan } from "@/lib/permissions";
+import { assertWorkflowAccess } from "@/lib/access";
 
 function requiredComment(comment: string) {
   const value = comment.trim();
@@ -73,15 +74,11 @@ export async function executePayment(requestId: number, user: SessionUser, bankR
   return { id: payment.id, number };
 }
 
-function assertWorkflowScope(user: SessionUser, companyId: number) {
-  if (user.role !== "owner" && user.companyId !== companyId) throw new Error("无权查看其他公司申请");
-}
-
 export async function getPurchaseApprovalDetail(requestId: number, user: SessionUser) {
   assertCan(user, "purchase-requests", "read");
   const [header] = await sqlQuery<Record<string, unknown>>(`SELECT r.id,r.company_id AS "companyId",r.project_id AS "projectId",r.number,r.payment_type AS "paymentType",r.amount_cents AS "amountCents",r.reason,r.status,r.created_at::text AS "createdAt",r.attachment_url AS "attachmentUrl",c.name AS "companyName",p.name AS "projectName",s.name AS "supplierName",u.name AS "requesterName" FROM purchase_requests r JOIN companies c ON c.id=r.company_id JOIN projects p ON p.id=r.project_id JOIN suppliers s ON s.id=r.supplier_id JOIN users u ON u.id=r.requested_by WHERE r.id=$1 AND NOT r.is_void`, [requestId]);
   if (!header) throw new Error("采购申请不存在");
-  assertWorkflowScope(user, Number(header.companyId));
+  await assertWorkflowAccess(user, Number(header.companyId), Number(header.projectId), "purchase");
   const items = await sqlQuery<Record<string, unknown>>(`SELECT i.id,s.id AS "skuId",s.code AS "skuCode",s.name AS "skuName",s.image_url AS "imageUrl",s.quantity,s.unit,s.budget_unit_cents AS "budgetUnitCents",i.unit_price_cents AS "finalUnitCents",i.amount_cents AS "itemAmountCents",(i.unit_price_cents-s.budget_unit_cents)*i.quantity AS "overBudgetCents",CASE WHEN s.budget_unit_cents=0 THEN 0 ELSE round((i.unit_price_cents-s.budget_unit_cents)*100.0/s.budget_unit_cents,2) END AS "overBudgetPercent" FROM purchase_request_items i JOIN skus s ON s.id=i.sku_id WHERE i.request_id=$1 ORDER BY i.id`, [requestId]);
   const quotes = await sqlQuery<Record<string, unknown>>(`SELECT q.sku_id AS "skuId",sup.name AS "supplierName",q.unit_price_cents AS "unitPriceCents",q.freight_cents AS "freightCents",q.install_cents AS "installCents",q.tax_rate_bps AS "taxRateBps",q.payment_terms AS "paymentTerms",q.lead_days AS "leadDays",q.status,q.attachment_url AS "attachmentUrl" FROM supplier_quotes q JOIN suppliers sup ON sup.id=q.supplier_id WHERE q.sku_id IN (SELECT sku_id FROM purchase_request_items WHERE request_id=$1) ORDER BY q.sku_id,q.unit_price_cents`, [requestId]);
   const approvals = await sqlQuery<Record<string, unknown>>(`SELECT a.decision,a.comment,a.decided_at::text AS "decidedAt",u.name AS "approverName" FROM purchase_approvals a JOIN users u ON u.id=a.approver_id WHERE a.request_id=$1 ORDER BY a.decided_at DESC`, [requestId]);
@@ -92,7 +89,14 @@ export async function getPaymentApprovalDetail(requestId: number, user: SessionU
   assertCan(user, "payment-requests", "read");
   const [header] = await sqlQuery<Record<string, unknown>>(`SELECT r.id,r.company_id AS "companyId",r.project_id AS "projectId",r.number,r.amount_cents AS "requestAmountCents",r.reason,r.status,r.created_at::text AS "createdAt",p.name AS "projectName",s.name AS "supplierName",po.number AS "orderNumber",y.number AS "payableNumber",y.amount_cents AS "payableAmountCents",y.paid_cents AS "paidCents",(y.amount_cents-y.paid_cents-r.amount_cents)::float8 AS "remainingAfterCents",y.invoice_status AS "invoiceStatus",GREATEST(y.amount_cents-COALESCE((SELECT sum(ia.amount_cents) FROM invoice_allocations ia WHERE ia.payable_id=y.id),0),0)::float8 AS "missingInvoiceCents",a.name AS "accountName",a.balance_cents AS "accountBalanceCents",(a.balance_cents-r.amount_cents)::float8 AS "accountBalanceAfterCents",u.name AS "requesterName" FROM payment_requests r JOIN payables y ON y.id=r.payable_id JOIN purchase_orders po ON po.id=y.purchase_order_id JOIN projects p ON p.id=r.project_id JOIN suppliers s ON s.id=y.supplier_id JOIN company_accounts a ON a.id=r.account_id JOIN users u ON u.id=r.requested_by WHERE r.id=$1 AND NOT r.is_void`, [requestId]);
   if (!header) throw new Error("付款申请不存在");
-  assertWorkflowScope(user, Number(header.companyId));
+  await assertWorkflowAccess(user, Number(header.companyId), Number(header.projectId), "payment");
+  const canViewAccountBalance = user.role === "owner" || user.role === "finance";
+  if (!canViewAccountBalance) {
+    delete header.accountName;
+    delete header.accountBalanceCents;
+    delete header.accountBalanceAfterCents;
+  }
+  header.accountBalanceAccessible = canViewAccountBalance;
   const approvals = await sqlQuery<Record<string, unknown>>(`SELECT a.decision,a.comment,a.decided_at::text AS "decidedAt",u.name AS "approverName" FROM payment_approvals a JOIN users u ON u.id=a.approver_id WHERE a.payment_request_id=$1 ORDER BY a.decided_at DESC`, [requestId]);
   return { header, approvals };
 }

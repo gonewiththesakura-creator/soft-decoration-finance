@@ -7,12 +7,14 @@ import { importRowsAtomic, preflightImport } from "@/data/excel-import";
 import { createAttachment, getAttachmentContent, getAttachments, voidAttachment } from "@/data/attachments";
 import { getDocumentDetail } from "@/data/document-detail";
 import { getFinanceWorkspace } from "@/data/finance-workspace";
+import { getDashboardData } from "@/data/dashboard";
 import { getCustomerProfile, getSupplierProfile } from "@/data/partners";
 import * as XLSX from "xlsx";
 import { confirmMigrationBatch, createMigrationWorkbook, getMigrationBatch, importMigrationBatch, rollbackMigrationBatch, stageMigrationBatch, suggestedMappings, updateStagingRow } from "@/data/data-migration";
 import { createWorkspacePurchaseRequest, getProcurementWorkspace } from "@/data/procurement-workspace";
 import { getProjectDetail } from "@/data/project-detail";
 import { authenticate } from "@/lib/auth";
+import { assertProjectAccess, assertWorkflowAccess } from "@/lib/access";
 import type { SessionUser } from "@/lib/auth";
 
 const owner: SessionUser = { id: 1, companyId: null, name: "陈屿", email: "owner@zhiheng.local", role: "owner" };
@@ -29,6 +31,13 @@ describe.sequential("business workflow integration", () => {
     const data = await getResourceData("projects", user, manager.companyId);
     expect(data?.rows).toHaveLength(4);
     expect(data?.rows.every((row) => row.companyId === 1)).toBe(true);
+  });
+
+  it("rejects same-company workflow access without project membership", async () => {
+    const [project] = await sqlQuery<{ id: number; companyId: number }>(`SELECT id,company_id AS "companyId" FROM projects WHERE company_id=1 ORDER BY id LIMIT 1`);
+    const outsider: SessionUser = { id: 999999, companyId: project.companyId, name: "非成员", email: "outsider@example.test", role: "project_manager" };
+    await expect(assertProjectAccess(outsider, project.id)).rejects.toThrow("项目不存在或无权查看");
+    await expect(assertWorkflowAccess(outsider, project.companyId, project.id, "purchase")).rejects.toThrow("项目不存在或无权查看");
   });
 
   it("approves a purchase and atomically creates order, payable and audit log", async () => {
@@ -113,6 +122,15 @@ describe.sequential("business workflow integration", () => {
     expect(paymentDetail.header.orderNumber).toBeTruthy(); expect(Number(paymentDetail.header.accountBalanceAfterCents)).toBeTypeOf("number");
   });
 
+  it("marks payment account balance inaccessible for an authorized project manager", async () => {
+    const [payment] = await sqlQuery<{ id: number; managerId: number; companyId: number }>(`SELECT r.id,p.manager_id AS "managerId",r.company_id AS "companyId" FROM payment_requests r JOIN projects p ON p.id=r.project_id WHERE NOT r.is_void ORDER BY r.id LIMIT 1`);
+    const [manager] = await sqlQuery<{ name: string; email: string }>(`SELECT name,email FROM users WHERE id=$1`, [payment.managerId]);
+    const detail = await getPaymentApprovalDetail(payment.id, { id: payment.managerId, companyId: payment.companyId, name: manager.name, email: manager.email, role: "project_manager" });
+    expect(detail.header.accountBalanceAccessible).toBe(false);
+    expect(detail.header).not.toHaveProperty("accountBalanceCents");
+    expect(detail.header).not.toHaveProperty("accountBalanceAfterCents");
+  });
+
   it("keeps approved payment requests within the current payable balance", async () => {
     const [invalid] = await sqlQuery<{ count: number }>(`SELECT count(*)::int AS count FROM payment_requests r JOIN payables y ON y.id=r.payable_id WHERE r.status='已通过' AND NOT r.is_void AND r.amount_cents>y.amount_cents-y.paid_cents`);
     expect(invalid.count).toBe(0);
@@ -155,6 +173,18 @@ describe.sequential("business workflow integration", () => {
     expect(Number(data.summary.balance)).toBeGreaterThan(0);
     expect(data.accounts.every((account) => Number(account.balanceCents) >= 0)).toBe(true);
     expect(Array.isArray(data.receivables)).toBe(true);
+  });
+
+  it("keeps finance-only dashboard facts unavailable to designers", async () => {
+    const [designer] = await sqlQuery<{ id: number; companyId: number; name: string; email: string }>(
+      `SELECT id,company_id AS "companyId",name,email FROM users WHERE role='designer' ORDER BY company_id,id LIMIT 1`,
+    );
+    const data = await getDashboardData({ ...designer, role: "designer" }, designer.companyId);
+    expect(data.summary.balance).toBeNull();
+    expect(data.summary.receivable30).toBeNull();
+    expect(data.summary.payable30).toBeNull();
+    expect(data.cashflow).toEqual([]);
+    expect(data.summary.purchaseRequestAccessible).toBe(true);
   });
 
   it("aggregates customer and supplier profiles from their source documents", async () => {

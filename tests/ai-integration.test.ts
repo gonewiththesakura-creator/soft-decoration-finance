@@ -4,6 +4,7 @@ import { MockAIProvider } from "@/ai/providers/mock";
 import { AIProviderError } from "@/ai/providers/openai-compatible";
 import type { AIProviderResponse } from "@/ai/providers/types";
 import { executeAITool } from "@/ai/tools/registry";
+import { assertAIRateLimit, limitsForUser } from "@/ai/rate-limit";
 import { sqlQuery } from "@/db/client";
 import type { SessionUser } from "@/lib/auth";
 
@@ -42,8 +43,8 @@ describe.sequential("AI core integration", () => {
     expect(provider.requests[1].tools).toBeUndefined();
     expect(provider.requests[1].model).toBe(process.env.AI_MODEL_FAST || "gpt-5.4-mini");
     expect(provider.requests[1].input.some((item) => item.type === "message" && item.content.includes("授权只读业务工具结果"))).toBe(true);
-    const [audit] = await sqlQuery<{ runs: number; calls: number; messages: number }>(`SELECT (SELECT count(*)::int FROM ai_runs WHERE conversation_id=$1 AND status='completed') AS runs,(SELECT count(*)::int FROM ai_tool_calls tc JOIN ai_runs r ON r.id=tc.ai_run_id WHERE r.conversation_id=$1 AND tc.tool_name='get_project_summary' AND tc.success) AS calls,(SELECT count(*)::int FROM ai_messages WHERE conversation_id=$1) AS messages`, [result.conversationId]);
-    expect(audit).toEqual({ runs: 1, calls: 1, messages: 2 });
+    const [audit] = await sqlQuery<{ runs: number; calls: number; messages: number; totalTokens: number; primaryCalls: number; fastCalls: number }>(`SELECT (SELECT count(*)::int FROM ai_runs WHERE conversation_id=$1 AND status='completed') AS runs,(SELECT count(*)::int FROM ai_tool_calls tc JOIN ai_runs r ON r.id=tc.ai_run_id WHERE r.conversation_id=$1 AND tc.tool_name='get_project_summary' AND tc.success) AS calls,(SELECT count(*)::int FROM ai_messages WHERE conversation_id=$1) AS messages,(SELECT total_tokens FROM ai_runs WHERE conversation_id=$1 ORDER BY id DESC LIMIT 1) AS "totalTokens",(SELECT primary_calls FROM ai_runs WHERE conversation_id=$1 ORDER BY id DESC LIMIT 1) AS "primaryCalls",(SELECT fast_calls FROM ai_runs WHERE conversation_id=$1 ORDER BY id DESC LIMIT 1) AS "fastCalls"`, [result.conversationId]);
+    expect(audit).toEqual({ runs: 1, calls: 1, messages: 2, totalTokens: 60, primaryCalls: 1, fastCalls: 1 });
   });
 
   it("uses the fast model to repair invalid final JSON", async () => {
@@ -111,5 +112,58 @@ describe.sequential("AI core integration", () => {
     expect(data.summary.pendingPayments).toBeGreaterThanOrEqual(0);
     expect(data.summary.pendingPaymentCents).toBeGreaterThanOrEqual(0);
     expect(data.recentPendingSamples.length).toBeLessThanOrEqual(8);
+  });
+
+  it("keeps purchase approvals out of the finance dashboard brief", async () => {
+    const [finance] = await sqlQuery<{ id: number; companyId: number; name: string; email: string }>(`SELECT id,company_id AS "companyId",name,email FROM users WHERE role='finance' ORDER BY id LIMIT 1`);
+    const result = await executeAITool("get_dashboard_brief", {}, { user: { ...finance, role: "finance" }, companyScope: finance.companyId, pageContext: {} });
+    const data = result.data as { summary: Record<string, unknown>; recentPendingSamples: Array<{ kind: string }> };
+    expect(data.summary.purchaseRequestAccessible).toBe(false);
+    expect(data.summary).not.toHaveProperty("pendingPurchases");
+    expect(data.summary).not.toHaveProperty("pendingPurchaseCents");
+    expect(data.recentPendingSamples.every((item) => item.kind !== "采购审批")).toBe(true);
+    expect(result.evidence.every((item) => !item.label.includes("待审批采购"))).toBe(true);
+  });
+
+  it("returns minimized workflow DTOs without attachments or account balances outside finance roles", async () => {
+    const [payment] = await sqlQuery<{ id: number; projectId: number; managerId: number; companyId: number }>(`SELECT r.id,r.project_id AS "projectId",p.manager_id AS "managerId",r.company_id AS "companyId" FROM payment_requests r JOIN projects p ON p.id=r.project_id WHERE NOT r.is_void ORDER BY r.id LIMIT 1`);
+    const [manager] = await sqlQuery<{ name: string; email: string }>(`SELECT name,email FROM users WHERE id=$1`, [payment.managerId]);
+    const user: SessionUser = { id: payment.managerId, companyId: payment.companyId, name: manager.name, email: manager.email, role: "project_manager" };
+    const paymentResult = await executeAITool("get_payment_request_detail", { paymentRequestId: payment.id }, { user, companyScope: payment.companyId, pageContext: {} });
+    const paymentText = JSON.stringify(paymentResult.data);
+    expect(paymentText).toContain('"accessible":false');
+    expect(paymentText).not.toContain("accountBalanceAfterCents");
+
+    const [purchase] = await sqlQuery<{ id: number }>(`SELECT id FROM purchase_requests WHERE NOT is_void ORDER BY id LIMIT 1`);
+    const purchaseResult = await executeAITool("get_purchase_request_detail", { purchaseRequestId: purchase.id }, { user: owner, companyScope: null, pageContext: {} });
+    expect(JSON.stringify(purchaseResult.data)).not.toContain("attachmentUrl");
+  });
+
+  it("enforces minute, daily request and daily token limits with the owner multiplier", async () => {
+    const keys = ["AI_RATE_LIMIT_PER_MINUTE", "AI_DAILY_REQUEST_LIMIT", "AI_DAILY_TOKEN_LIMIT", "AI_OWNER_LIMIT_MULTIPLIER"] as const;
+    const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    const [user] = await sqlQuery<{ id: number; companyId: number; name: string; email: string }>(`SELECT id,company_id AS "companyId",name,email FROM users WHERE role='designer' ORDER BY id LIMIT 1`);
+    const employee: SessionUser = { ...user, role: "designer" };
+    const [conversation] = await sqlQuery<{ id: number }>(`INSERT INTO ai_conversations(user_id,company_id,title,page_context) VALUES($1,$2,'rate-limit-test','{}'::jsonb) RETURNING id`, [employee.id, employee.companyId]);
+    try {
+      process.env.AI_RATE_LIMIT_PER_MINUTE = "2"; process.env.AI_DAILY_REQUEST_LIMIT = "20"; process.env.AI_DAILY_TOKEN_LIMIT = "1000"; process.env.AI_OWNER_LIMIT_MULTIPLIER = "3";
+      expect(limitsForUser(owner)).toMatchObject({ perMinute: 6, perDay: 60, tokensPerDay: 3000 });
+      await sqlQuery(`INSERT INTO ai_runs(conversation_id,user_id,company_id,provider,model,status,started_at) VALUES($1,$2,$3,'rate-limit-test','mock','failed',now()),($1,$2,$3,'rate-limit-test','mock','failed',now())`, [conversation.id, employee.id, employee.companyId]);
+      await expect(assertAIRateLimit(employee)).rejects.toMatchObject({ code: "AI_RATE_LIMIT_PER_MINUTE" });
+
+      await sqlQuery(`DELETE FROM ai_runs WHERE provider='rate-limit-test' AND user_id=$1`, [employee.id]);
+      process.env.AI_RATE_LIMIT_PER_MINUTE = "20"; process.env.AI_DAILY_REQUEST_LIMIT = "2";
+      await sqlQuery(`INSERT INTO ai_runs(conversation_id,user_id,company_id,provider,model,status,started_at) VALUES($1,$2,$3,'rate-limit-test','mock','failed',now()-interval '2 minute'),($1,$2,$3,'rate-limit-test','mock','failed',now()-interval '2 minute')`, [conversation.id, employee.id, employee.companyId]);
+      await expect(assertAIRateLimit(employee)).rejects.toMatchObject({ code: "AI_DAILY_REQUEST_LIMIT" });
+
+      await sqlQuery(`DELETE FROM ai_runs WHERE provider='rate-limit-test' AND user_id=$1`, [employee.id]);
+      process.env.AI_DAILY_REQUEST_LIMIT = "20"; process.env.AI_DAILY_TOKEN_LIMIT = "100";
+      await sqlQuery(`INSERT INTO ai_runs(conversation_id,user_id,company_id,provider,model,status,total_tokens,started_at) VALUES($1,$2,$3,'rate-limit-test','mock','completed',100,now()-interval '2 minute')`, [conversation.id, employee.id, employee.companyId]);
+      await expect(assertAIRateLimit(employee)).rejects.toMatchObject({ code: "AI_DAILY_TOKEN_LIMIT" });
+    } finally {
+      await sqlQuery(`DELETE FROM ai_runs WHERE provider='rate-limit-test' AND user_id=$1`, [employee.id]);
+      await sqlQuery(`DELETE FROM ai_conversations WHERE id=$1`, [conversation.id]);
+      for (const key of keys) { const value = previous[key]; if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    }
   });
 });

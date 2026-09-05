@@ -14,9 +14,27 @@
 .chart-tooltip-title { margin-bottom: 7px; color: var(--ink-strong); font-size: 11px; font-weight: 700; }
 .chart-tooltip-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 4px; font-size: 10px; }
 .chart-tooltip-row strong { font-variant-numeric: tabular-nums; }
+.chart-tooltip-note { max-width: 230px; margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--line); color: var(--muted); font-size: 8px; line-height: 1.5; }
+.drilldown-tooltip { border-top: 2px solid var(--brand-2); }
+.project-health-tooltip { min-width: 220px; }
+.chart-clickable { cursor: pointer; transition: opacity var(--motion-hover) var(--ease-out),filter var(--motion-hover) var(--ease-out); }
+.chart-clickable:hover { filter: brightness(1.06); }
+.health-score-label { fill: var(--ink-strong); font-size: 10px; font-weight: 700; }
 .chart-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .chart-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 10px; color: var(--muted); font-size: 10px; }
 .chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.interactive-legend { align-items: stretch; flex-direction: column; gap: 2px; }
+.interactive-legend button { width: 100%; min-height: 30px; display: grid; grid-template-columns: 8px minmax(0,1fr) auto; align-items: center; gap: 7px; padding: 5px 7px; border: 0; border-radius: 3px; color: var(--ink); background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.interactive-legend button:hover,.interactive-legend button:focus-visible { background: var(--canvas-deep); outline: none; }
+.interactive-legend button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.interactive-legend button small { color: var(--muted); font-variant-numeric: tabular-nums; }
+.interactive-legend button.negative small { color: var(--red); }
+.chart-drill-links { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+.chart-drill-links a,.chart-drill-link { display: inline-flex; align-items: center; min-height: 28px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 3px; color: var(--muted-strong); background: var(--surface); font-size: 9px; }
+.chart-drill-links a:hover,.chart-drill-links a:focus-visible,.chart-drill-link:hover,.chart-drill-link:focus-visible { border-color: var(--sage); color: var(--green); outline: none; }
+.project-drill-links a { flex: 1 1 150px; justify-content: space-between; }
+.chart-drill-select { display: flex; align-items: center; justify-content: flex-end; gap: 7px; margin-top: 10px; color: var(--muted); font-size: 9px; }
+.chart-drill-select select { min-height: 30px; padding: 4px 26px 4px 8px; border: 1px solid var(--line); border-radius: 3px; color: var(--ink); background: var(--surface); font-size: 10px; }
 .chart-empty { min-height: 260px; display: grid; place-items: center; align-content: center; gap: 8px; color: var(--muted); text-align: center; }
 .chart-empty svg { width: 24px; color: var(--sage); }
 .chart-empty strong { color: var(--ink); font-size: 12px; }

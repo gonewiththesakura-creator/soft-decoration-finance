@@ -1,33 +1,27 @@
-# 版本状态
+# Version Status
 
-## 已完成（V1.0 验收整改）
+## Current: V1.5
 
-- 完整提交 `src/data` 业务服务，并通过公开仓库全新克隆验证
-- Push / PR 自动执行 typecheck、lint、test 和 build 的 GitHub Actions
-- 全部财务金额升级为 `NUMERIC(18,0)`，业务数量升级为 `NUMERIC(18,4)`
-- 基础资料与未确认业务的安全编辑、版本号和 before/after 审计
-- 收付款撤销/冲销、采购取消、退货、换货、退款及库存联动
-- 采购与付款宽屏审批详情、必填意见、老板审批与财务执行分离
-- 角色、公司和项目三层服务端权限，以及对应自动化权限测试
-- Excel 完整预检、原子导入、重复导入保护和导入日志
-- 生产密钥强制检查、登录限流/日志、实时用户状态与角色刷新
-- 老板首页六项指标和未来 30 天资金等式
-- 发票与应付/应收明细核销、银行回单及统一业务附件证据
-- 项目经营总账、预算版本、项目变更、操作日志与只读 AI 查询
+- Executive owner dashboard with cash outlook, prioritized actions, project health, company funds, aging and maturity drill-downs.
+- Real AI Core with OpenAI-compatible Responses/Chat adapter, structured output, streaming, stateless tool calling and multi-round conversations.
+- Role-filtered read-only business tools, server-owned evidence, prompt-injection boundaries and AI run/tool audit.
+- Shared workflow/project authorization for normal APIs and AI tools.
+- Minimized AI DTOs and explicit inaccessible-field semantics.
+- Numeric grounding guard for money, percentages, counts and dates.
+- Full-run Token accumulation, model-route counters, owner operations dashboard and configurable rate limits.
+- Data migration center, safe import/rollback, financial audit, approvals, payments, attachments and project operating ledger remain intact.
 
-## 尚未完成
+## Remaining Hardening
 
-- 附件目前保存受控 URL，尚未接入对象存储直传、病毒扫描和签名下载
-- 审计款最终金额的独立调整工作台
-- 质保到期定时任务，目前查询时动态计算释放状态
-- 超大 Excel 文件的异步队列、断点续传和任务重试
-- 邮件、企业微信或钉钉通知
-- OpenAI API 接入，目前 AI Service 为确定性只读查询实现
+- Object storage direct upload, virus scanning and signed attachment downloads.
+- Independent final audited-amount adjustment workspace.
+- Scheduled warranty-release jobs; the current status is calculated at query time.
+- Async queues, resumable upload and retry for very large workbooks.
+- Email, WeCom or DingTalk notifications.
+- Production pilot with real company data, provider capacity monitoring and externally managed PostgreSQL.
 
-## 已知约束
+## Constraints
 
-- 本地数据库为单机嵌入式 PostgreSQL，同一数据目录只能由一个数据库服务访问；多实例生产部署应迁移到托管 PostgreSQL。
-- 集团 Seed 数据只用于隔离演示环境；生产环境默认拒绝运行演示 Seed。
-- 财务及审批数据不提供物理删除入口，纠错采用作废、撤销、冲销或新版本。
-
-详细整改证据见 `docs/V1-AUDIT-FIX.md`。
+- The local database is embedded PostgreSQL and one data directory can be opened by only one database service. Multi-instance production deployment should use managed PostgreSQL.
+- Seed data is for isolated demonstration only. Production rejects demo seeding by default.
+- Financial and approval data uses void, reversal or a new version rather than physical deletion.

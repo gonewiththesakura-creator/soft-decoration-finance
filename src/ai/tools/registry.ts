@@ -11,6 +11,7 @@ import { sqlQuery } from "@/db/client";
 import type { SessionUser } from "@/lib/auth";
 import type { AIJSONSchema } from "@/ai/providers/types";
 import type { AIPageContext, AIToolContext, AIToolResult, RegisteredAITool } from "./types";
+import { customerAIDTO, paymentRequestAIDTO, projectAIDTO, purchaseRequestAIDTO, supplierAIDTO } from "./dto";
 
 const allRoles: SessionUser["role"][] = ["owner", "finance", "procurement", "project_manager", "designer"];
 const financeRoles: SessionUser["role"][] = ["owner", "finance"];
@@ -69,63 +70,38 @@ function moneyEvidence(label: string, cents: unknown, href?: string) {
   return { label, value: `¥${value.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, href };
 }
 
-function sanitizeProject(detail: Awaited<ReturnType<typeof getProjectDetail>>, role: SessionUser["role"]) {
-  if (!detail) return detail;
-  if (role === "designer") {
-    return {
-      project: detail.project,
-      metrics: {
-        appliedCents: detail.metrics.appliedCents,
-        orderedCents: detail.metrics.orderedCents,
-        deliveredCents: detail.metrics.deliveredCents,
-        remainingBudgetCents: detail.metrics.remainingBudgetCents,
-        pendingPurchases: detail.metrics.pendingPurchases,
-      },
-      risks: detail.risks.filter((risk) => /预算|采购|结束日期/.test(risk.label)),
-    };
-  }
-  if (role === "procurement") {
-    return {
-      project: detail.project,
-      metrics: {
-        appliedCents: detail.metrics.appliedCents,
-        orderedCents: detail.metrics.orderedCents,
-        deliveredCents: detail.metrics.deliveredCents,
-        payableCents: detail.metrics.payableCents,
-        purchaseInvoicedCents: detail.metrics.purchaseInvoicedCents,
-        missingInvoiceCents: detail.metrics.missingInvoiceCents,
-        remainingBudgetCents: detail.metrics.remainingBudgetCents,
-        pendingPurchases: detail.metrics.pendingPurchases,
-      },
-      risks: detail.risks.filter((risk) => /预算|采购|欠票|结束日期/.test(risk.label)),
-    };
-  }
-  return detail;
-}
-
 async function dashboardResult(context: AIToolContext): Promise<AIToolResult> {
   const dashboard = await getDashboardData(context.user, context.companyScope);
-  const analytics = await getDashboardAnalytics(context.user, context.companyScope, Number(dashboard.summary.balance));
+  const analytics = await getDashboardAnalytics(context.user, context.companyScope, dashboard.summary.balance);
   const firstGap = analytics.cashflow.find((point) => point.balanceCents < 0) ?? null;
   const cashflowHorizon = [7, 15, 30].map((day) => ({ day, ...(analytics.cashflow[Math.min(day, analytics.cashflow.length) - 1] ?? {}) }));
+  const summary = {
+    ...(dashboard.summary.balanceAccessible ? { balance: dashboard.summary.balance } : { balanceAccessible: false }),
+    ...(dashboard.summary.receivableAccessible ? { receivable30: dashboard.summary.receivable30, overdueReceivables: dashboard.summary.overdueReceivables } : { receivableAccessible: false }),
+    ...(dashboard.summary.payableAccessible ? { payable30: dashboard.summary.payable30, missingInvoice: dashboard.summary.missingInvoice } : { payableAccessible: false }),
+    ...(dashboard.summary.purchaseRequestAccessible ? { pendingPurchases: dashboard.summary.pendingPurchases, pendingPurchaseCents: dashboard.summary.pendingPurchaseCents } : { purchaseRequestAccessible: false }),
+    ...(dashboard.summary.paymentApprovalAccessible ? { pendingPayments: dashboard.summary.pendingPayments, pendingPaymentCents: dashboard.summary.pendingPaymentCents } : { paymentApprovalAccessible: false }),
+    activeProjects: dashboard.summary.activeProjects,
+  };
+  const evidence = [
+    ...(dashboard.summary.balanceAccessible ? [moneyEvidence("当前资金余额", dashboard.summary.balance, "/finance-workspace")] : []),
+    ...(dashboard.summary.receivableAccessible ? [moneyEvidence("30 天应收", dashboard.summary.receivable30, "/receivables")] : []),
+    ...(dashboard.summary.payableAccessible ? [moneyEvidence("30 天应付", dashboard.summary.payable30, "/payables")] : []),
+    ...(dashboard.summary.purchaseRequestAccessible ? [moneyEvidence(`待审批采购（${dashboard.summary.pendingPurchases} 笔）`, dashboard.summary.pendingPurchaseCents, "/purchase-requests")] : []),
+    ...(dashboard.summary.paymentApprovalAccessible ? [moneyEvidence(`待审批付款（${dashboard.summary.pendingPayments} 笔）`, dashboard.summary.pendingPaymentCents, "/payment-requests")] : []),
+    { label: "活跃项目", value: `${dashboard.summary.activeProjects} 个`, href: "/projects" },
+  ];
   return {
     summary: "经营驾驶舱、未来 30 天现金流和项目健康数据",
-    data: { summary: dashboard.summary, balances: dashboard.balances, overBudget: dashboard.overBudget, recentPendingSamples: dashboard.pending, cashflowHorizon, firstGap, projectHealth: analytics.projectHealth },
-    evidence: [
-      moneyEvidence("当前资金余额", dashboard.summary.balance, "/finance-workspace"),
-      moneyEvidence("30 天应收", dashboard.summary.receivable30, "/receivables"),
-      moneyEvidence("30 天应付", dashboard.summary.payable30, "/payables"),
-      moneyEvidence(`待审批采购（${dashboard.summary.pendingPurchases} 笔）`, dashboard.summary.pendingPurchaseCents, "/purchase-requests"),
-      moneyEvidence(`待审批付款（${dashboard.summary.pendingPayments} 笔）`, dashboard.summary.pendingPaymentCents, "/payment-requests"),
-      { label: "活跃项目", value: `${dashboard.summary.activeProjects} 个`, href: "/projects" },
-    ],
+    data: { summary, balances: dashboard.balances, overBudget: dashboard.overBudget, recentPendingSamples: dashboard.pending, cashflowHorizon, firstGap, projectHealth: analytics.projectHealth },
+    evidence,
   };
 }
 
 async function projectSummary(args: Record<string, unknown>, context: AIToolContext): Promise<AIToolResult> {
   const id = integerArg(args, "projectId", context.pageContext);
   const detail = await authorizedProject(id, context);
-  const visible = sanitizeProject(detail, context.user.role);
+  const visible = projectAIDTO(detail, context.user.role);
   return {
     summary: `项目 ${detail.project.name} 的授权范围摘要`,
     data: visible,
@@ -157,9 +133,17 @@ async function supplierResult(kind: "profile" | "invoice" | "purchases", args: R
   const name = String(profile.supplier.name);
   if (kind === "purchases") {
     const sections = await getSupplierSections(id, "orders");
-    return { summary: `${name} 的采购历史`, data: sections, evidence: [{ label: "供应商", value: name, href: `/suppliers/${id}?tab=orders` }] };
+    const rows = sections.flatMap((section) => section.rows).slice(0, 20).map((row) => ({ orderId: row.id, projectName: row.projectName, amountCents: row.amountCents, deliveredCents: row.deliveredCents, orderedAt: row.orderedAt, status: row.status }));
+    return { summary: `${name} 的采购历史`, data: { supplierId: id, supplierName: name, rows }, evidence: [{ label: "供应商", value: name, href: `/suppliers/${id}?tab=orders` }] };
   }
-  const data = kind === "invoice" ? { missingInvoiceCents: profile.metrics.missingInvoiceCents, payableCents: profile.metrics.payableCents, invoicedCents: profile.metrics.invoicedCents } : profile;
+  const [operations] = await sqlQuery<Record<string, unknown>>(`SELECT
+    (SELECT count(*)::int FROM purchase_orders po WHERE po.supplier_id=$1 AND NOT po.is_void) AS "orderCount",
+    COALESCE((SELECT round(avg(q.lead_days))::int FROM supplier_quotes q WHERE q.supplier_id=$1),0) AS "averageLeadDays",
+    CASE WHEN (SELECT count(*) FROM purchase_orders po WHERE po.supplier_id=$1 AND NOT po.is_void)=0 THEN 0 ELSE round(
+      (SELECT count(*) FROM purchase_returns r JOIN purchase_orders rpo ON rpo.id=r.purchase_order_id WHERE rpo.supplier_id=$1 AND NOT r.is_void)*100.0/
+      (SELECT count(*) FROM purchase_orders po WHERE po.supplier_id=$1 AND NOT po.is_void),2)::float8 END AS "returnRate"`, [id]);
+  const profileDTO = supplierAIDTO(profile, operations ?? {});
+  const data = kind === "invoice" ? { supplierId: id, supplierName: name, missingInvoiceCents: profileDTO.missingInvoiceCents, payableCents: profileDTO.payableCents } : profileDTO;
   return {
     summary: kind === "invoice" ? `${name} 的发票覆盖与欠票缺口` : `${name} 的供应商档案`,
     data,
@@ -176,7 +160,9 @@ async function customerResult(kind: "profile" | "receivables", args: Record<stri
   if (!profile) throw new Error("客户不存在或无权查看");
   ensureCompany(context.companyScope, profile.customer.companyId);
   const name = String(profile.customer.name);
-  const data = kind === "receivables" ? await getCustomerSections(id, "receivables") : profile;
+  const data = kind === "receivables"
+    ? { ...customerAIDTO(profile), rows: (await getCustomerSections(id, "receivables")).flatMap((section) => section.rows).slice(0, 20).map((row) => ({ receivableId: row.id, projectName: row.projectName, nodeName: row.nodeName, amountCents: row.amountCents, receivedCents: row.receivedCents, dueDate: row.dueDate, status: row.status })) }
+    : customerAIDTO(profile);
   return {
     summary: `${name} 的${kind === "receivables" ? "应收计划" : "客户档案"}`,
     data,
@@ -191,11 +177,11 @@ async function purchaseRequestResult(kind: "detail" | "risks", args: Record<stri
   const id = integerArg(args, "purchaseRequestId", context.pageContext);
   const detail = await getPurchaseApprovalDetail(id, context.user);
   ensureCompany(context.companyScope, detail.header.companyId);
-  await authorizedProject(Number(detail.header.projectId), context);
-  const risks = detail.items.filter((item) => Number(item.overBudgetCents) > 0).map((item) => ({ skuCode: item.skuCode, skuName: item.skuName, overBudgetCents: item.overBudgetCents, overBudgetPercent: item.overBudgetPercent }));
+  const dto = purchaseRequestAIDTO(detail);
+  const risks = dto.items.filter((item) => Number(item.overBudgetCents) > 0).map((item) => ({ skuCode: item.skuCode, skuName: item.skuName, overBudgetCents: item.overBudgetCents, overBudgetPercent: item.overBudgetPercent }));
   return {
     summary: `采购申请 ${String(detail.header.number)} 的${kind === "risks" ? "风险核查" : "单据明细"}`,
-    data: kind === "risks" ? { header: detail.header, overBudgetItems: risks, quoteCount: detail.quotes.length, approvals: detail.approvals } : detail,
+    data: kind === "risks" ? { header: dto.header, overBudgetItems: risks, quoteCount: dto.quotes.length, approvals: dto.approvals } : dto,
     evidence: [{ label: "采购申请", value: String(detail.header.number), href: `/purchase-requests?open=${id}` }, moneyEvidence("申请金额", detail.header.amountCents)],
   };
 }
@@ -204,25 +190,26 @@ async function paymentRequestResult(kind: "detail" | "risks", args: Record<strin
   const id = integerArg(args, "paymentRequestId", context.pageContext);
   const detail = await getPaymentApprovalDetail(id, context.user);
   ensureCompany(context.companyScope, detail.header.companyId);
-  await authorizedProject(Number(detail.header.projectId), context);
   const header = detail.header;
+  const dto = paymentRequestAIDTO(detail);
+  const balance = dto.header.accountBalance;
   const risks = {
-    insufficientBalance: Number(header.accountBalanceAfterCents) < 0,
+    insufficientBalance: balance.accessible ? Number(balance.balanceAfterCents) < 0 : null,
     missingInvoice: Number(header.missingInvoiceCents) > 0,
     overpay: Number(header.remainingAfterCents) < 0,
     requestAmountCents: header.requestAmountCents,
-    accountBalanceAfterCents: header.accountBalanceAfterCents,
+    accountBalance: balance,
     missingInvoiceCents: header.missingInvoiceCents,
     remainingAfterCents: header.remainingAfterCents,
     invoiceStatus: header.invoiceStatus,
   };
   return {
     summary: `付款申请 ${String(header.number)} 的${kind === "risks" ? "只读风险核查" : "单据明细"}`,
-    data: kind === "risks" ? { header: { id: header.id, number: header.number, projectName: header.projectName, supplierName: header.supplierName, status: header.status, reason: header.reason }, risks, approvals: detail.approvals } : detail,
+    data: kind === "risks" ? { header: dto.header, risks, approvals: dto.approvals } : dto,
     evidence: [
       { label: "付款申请", value: String(header.number), href: `/payment-requests?open=${id}` },
       moneyEvidence("申请金额", header.requestAmountCents),
-      moneyEvidence("付款后余额", header.accountBalanceAfterCents),
+      ...(balance.accessible ? [moneyEvidence("付款后余额", balance.balanceAfterCents)] : []),
     ],
   };
 }
@@ -335,15 +322,17 @@ export const aiTools: RegisteredAITool[] = [
   define("get_project_summary", "读取一个已授权项目的基本信息、核心指标和风险", idSchema("projectId", "项目 ID；使用页面上下文中的 projectId"), allRoles, projectSummary),
   define("get_project_health", "计算项目健康分、风险原因和关键经营指标", idSchema("projectId", "项目 ID"), projectFinanceRoles, async (args, context) => {
     const id = integerArg(args, "projectId", context.pageContext); const detail = await authorizedProject(id, context);
+    const visible = projectAIDTO(detail, context.user.role);
     const health = calculateProjectHealth({ contractCents: detail.project.currentContractCents, budgetCents: detail.project.budgetCents, receivedCents: detail.metrics.receivedCents, orderedCents: detail.metrics.orderedCents, payableCents: detail.metrics.payableCents, paidCents: detail.metrics.paidCents, purchaseInvoicedCents: detail.metrics.purchaseInvoicedCents, overdueReceivableCents: detail.metrics.overdueReceivableCents });
-    return { summary: `${detail.project.name} 项目健康评估`, data: { health, risks: detail.risks, metrics: detail.metrics }, evidence: [{ label: "健康分", value: `${health.score} · ${health.label}`, href: `/projects/${id}` }] };
+    return { summary: `${detail.project.name} 项目健康评估`, data: { health, risks: visible.risks, metrics: visible.metrics }, evidence: [{ label: "健康分", value: `${health.score} · ${health.label}`, href: `/projects/${id}` }] };
   }),
   define("get_project_cash_curve", "读取项目累计收款与付款曲线", idSchema("projectId", "项目 ID"), projectFinanceRoles, (args, context) => projectAnalyticsResult("cash", args, context)),
   define("get_project_cost_breakdown", "读取项目按品类汇总的采购成本", idSchema("projectId", "项目 ID"), allRoles, (args, context) => projectAnalyticsResult("cost", args, context)),
   define("get_project_procurement_pipeline", "读取项目 SKU 从询价到到货的采购管线", idSchema("projectId", "项目 ID"), allRoles, (args, context) => projectAnalyticsResult("pipeline", args, context)),
   define("get_project_risks", "读取项目已由系统规则识别的经营风险", idSchema("projectId", "项目 ID"), projectFinanceRoles, async (args, context) => {
     const id = integerArg(args, "projectId", context.pageContext); const detail = await authorizedProject(id, context);
-    return { summary: `${detail.project.name} 的项目风险`, data: { risks: detail.risks, metrics: detail.metrics }, evidence: [{ label: "风险项", value: `${detail.risks.length} 项`, href: `/projects/${id}` }] };
+    const visible = projectAIDTO(detail, context.user.role);
+    return { summary: `${detail.project.name} 的项目风险`, data: { risks: visible.risks, metrics: visible.metrics }, evidence: [{ label: "风险项", value: `${visible.risks.length} 项`, href: `/projects/${id}` }] };
   }),
   define("get_supplier_profile", "读取供应商档案与合作指标", idSchema("supplierId", "供应商 ID"), ["owner", "finance", "procurement"], (args, context) => supplierResult("profile", args, context)),
   define("get_supplier_invoice_gap", "读取供应商应付、进项发票与欠票缺口", idSchema("supplierId", "供应商 ID"), ["owner", "finance", "procurement"], (args, context) => supplierResult("invoice", args, context)),

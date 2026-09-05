@@ -4,9 +4,10 @@ import { OpenAICompatibleProvider } from "@/ai/providers/openai-compatible";
 import { aiResponseSchema, parseAIResponse } from "@/ai/response";
 import { buildSystemPrompt } from "@/ai/prompts";
 import { getAIToolsForRole } from "@/ai/tools/registry";
+import { applyNumericGrounding } from "@/ai/grounding";
 import type { SessionUser } from "@/lib/auth";
 
-const config: AIConfig = { provider: "openai-compatible", baseUrl: "https://provider.test/v1", apiKey: "test-only-key", primaryModel: "primary", fastModel: "fast", apiMode: "auto", store: false, timeoutMs: 5_000, configured: true };
+const config: AIConfig = { provider: "openai-compatible", baseUrl: "https://provider.test/v1", apiKey: "test-only-key", primaryModel: "primary", fastModel: "fast", apiMode: "auto", store: false, timeoutMs: 5_000, configured: true, minuteRequestLimit: 6, dailyRequestLimit: 100, dailyTokenLimit: 200_000, ownerLimitMultiplier: 5 };
 const request = { model: "primary", instructions: "test", input: [{ type: "message" as const, role: "user" as const, content: "hello" }] };
 const chatSuccess = { model: "primary", choices: [{ message: { content: "ok" } }] };
 const responsesSuccess = { model: "primary", output_text: "ok", output: [] };
@@ -80,5 +81,38 @@ describe("AI response and role boundary", () => {
     expect(prompt).toContain("不可信数据");
     expect(prompt).toContain("不得声称已审批、付款、记账、创建或修改记录");
     expect(buildSystemPrompt(designer, {})).toContain("禁止展示公司现金");
+  });
+
+  it("removes metrics and redacts text when numbers are not authorized facts", () => {
+    const response = aiResponseSchema.parse({
+      summary: "应付合计 ¥1,234.00，另有 ¥9,999.00 无法追溯。",
+      severity: "warning",
+      metrics: [{ label: "应付", value: "¥9,999.00", tone: "warning" }],
+      findings: [{ title: "已读取 2 笔", detail: "合计 ¥1,234.00", severity: "info" }],
+      evidence: [], recommendations: [], suggestedActions: [], degraded: false, notice: "只读",
+    });
+    const guarded = applyNumericGrounding(response, [{ data: { totalCents: 123_400, rowCount: 2 } }]);
+    expect(guarded.unverifiedCount).toBe(2);
+    expect(guarded.response.summary).toContain("¥1,234.00");
+    expect(guarded.response.summary).toContain("[未验证数字已隐藏]");
+    expect(guarded.response.metrics).toHaveLength(0);
+    expect(guarded.response.findings.at(-1)?.title).toBe("数字可信度保护已触发");
+  });
+
+  it("redacts business numbers when the model skipped all tools", () => {
+    const response = aiResponseSchema.parse({ summary: "预计利润 ¥99.00，增长 95%", severity: "warning", metrics: [{ label: "利润率 95%", value: "95%", tone: "warning" }], findings: [], evidence: [], recommendations: [], suggestedActions: [], degraded: false, notice: "只读" });
+    const guarded = applyNumericGrounding(response, []);
+    expect(guarded.unverifiedCount).toBe(4);
+    expect(guarded.response.summary).not.toContain("¥99.00");
+    expect(guarded.response.metrics).toHaveLength(0);
+  });
+
+  it("does not let identifiers or counts authorize percentages", () => {
+    const response = aiResponseSchema.parse({ summary: "项目健康度 40%", severity: "info", metrics: [{ label: "毛利率 95%", value: "偏高", tone: "warning" }], findings: [{ title: "异常比例", detail: "共 2 笔，风险率 2%", severity: "warning" }], evidence: [], recommendations: [], suggestedActions: [], degraded: false, notice: "只读" });
+    const guarded = applyNumericGrounding(response, [{ data: { projectId: 95, rowCount: 2, completionRate: 40 } }]);
+    expect(guarded.response.summary).toContain("40%");
+    expect(guarded.response.metrics).toHaveLength(0);
+    expect(guarded.response.findings[0].detail).toContain("2 笔");
+    expect(guarded.response.findings[0].detail).toContain("[未验证数字已隐藏]");
   });
 });

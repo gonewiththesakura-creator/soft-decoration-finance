@@ -14,17 +14,18 @@ import { formatDate, formatMoney, getStatusTone } from "@/lib/format";
 
 type Item = Record<string, unknown> & { id: number; kind: string; priority: string };
 
-export default async function FinanceWorkspacePage() {
-  const user = await requireSession();
+export default async function FinanceWorkspacePage({ searchParams }: { searchParams: Promise<{ date?: string }> }) {
+  const [user, query] = await Promise.all([requireSession(), searchParams]);
   if (!can(user, "accounts")) notFound();
   const selected = await getCompanyScope(user);
-  const data = await getFinanceWorkspace(user, selected);
+  const focusDate = /^\d{4}-\d{2}-\d{2}$/.test(query.date ?? "") ? query.date : undefined;
+  const data = await getFinanceWorkspace(user, selected, focusDate);
   const analytics = await getFinanceAnalytics(user, selected, data.summary.balance);
-  const todayActions = ([...data.payments, ...data.receivables, ...data.payables] as Item[]).sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate))).slice(0, 6);
+  const todayActions = ([...data.payments, ...data.receivables, ...data.payables] as Item[]).filter((item) => !focusDate || String(item.dueDate).slice(0, 10) === focusDate).sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate))).slice(0, 6);
   const firstGap = analytics.cashflow.find((point) => point.balanceCents < 0);
 
   return <main className="content operating-page finance-os os-page-enter">
-    <header className="operating-heading"><div><div className="eyebrow">财务执行 · 资金优先</div><h1>财务工作台</h1><p className="page-description">先判断资金趋势和到期压力，再进入今日执行队列。</p></div><div className="heading-actions"><Link className="button" href="/accounts"><CircleDollarSign />资金账户</Link><Link className="button primary" href="/receipts?new=1"><Banknote />登记收款</Link></div></header>
+    <header className="operating-heading"><div><div className="eyebrow">财务执行 · 资金优先</div><h1>财务工作台</h1><p className="page-description">{focusDate ? `正在聚焦 ${formatDate(focusDate)} 的应收与应付到期事项。` : "先判断资金趋势和到期压力，再进入今日执行队列。"}</p></div><div className="heading-actions">{focusDate ? <Link className="button" href="/finance-workspace">清除日期聚焦</Link> : null}<Link className="button" href="/accounts"><CircleDollarSign />资金账户</Link><Link className="button primary" href="/receipts?new=1"><Banknote />登记收款</Link></div></header>
 
     <AIInsightPanel eyebrow="Finance AI" title="资金与到期风险分析" description="基于当前公司范围复核未来 30 天现金流、逾期应收和近期应付。" prompt="请分析当前财务工作台：先读取 30 天现金流、逾期应收和未来 7 天应付，指出最紧迫的资金风险、数据依据和人工处理建议。" pageContext={{ pathname: "/finance-workspace", pageType: "finance_workspace" }} />
 
@@ -60,7 +61,7 @@ export default async function FinanceWorkspacePage() {
 
     <section className="finance-execution" id="execution">
       <div className="execution-heading"><div><span className="section-kicker">Execution</span><h2>行动与业务明细</h2><p>原有应收、应付、付款、发票和账户队列完整保留。</p></div></div>
-      <FinanceWorkspace data={{ ...data, receivables: data.receivables as Item[], payables: data.payables as Item[], payments: data.payments as Item[], supplierInvoices: data.supplierInvoices as Item[], customerInvoices: data.customerInvoices as Item[] }} role={user.role} />
+      <FinanceWorkspace data={{ ...data, receivables: data.receivables as Item[], payables: data.payables as Item[], payments: data.payments as Item[], supplierInvoices: data.supplierInvoices as Item[], customerInvoices: data.customerInvoices as Item[] }} role={user.role} focusDate={focusDate} />
     </section>
   </main>;
 }

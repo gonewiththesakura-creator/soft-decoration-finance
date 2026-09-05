@@ -18,4 +18,6 @@ The model cannot issue SQL. Every tool below maps to a fixed server implementati
 
 Tool results contain `summary`, typed business `data` and linkable `evidence`. Tool calls write only the tool name, bounded arguments, result summary, duration and success state to `ai_tool_calls`.
 
-There are no create, update, approval, payment, import or delete tools in V1.4. Suggested actions in model output are links or draft descriptions and require a human to act in the normal business UI.
+The model-facing `data` object is an AI DTO rather than a database or page object. Supplier contact and tax fields, customer contact fields, attachment URLs, internal approval comments and inaccessible account balances are excluded.
+
+There are no create, update, approval, payment, import or delete tools in V1.5. Suggested actions in model output are links or draft descriptions and require a human to act in the normal business UI.

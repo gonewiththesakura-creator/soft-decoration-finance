@@ -12,9 +12,9 @@
 - 付款审批、付款登记、应付余额与账户余额联动
 - 收款登记、应收余额与账户余额联动
 - 项目经营总账、质保金独立状态、预算版本、退货冲减及操作日志
-- 老板首页六项核心指标与未来 30 天现金流
+- V1.5 老板经营驾驶舱：现金流预测、行动中心、项目健康度、资金结构、账龄与到期分析
 - 数据迁移中心：日常标准导入、历史多 Sheet、字段 Mapping、名称解析、暂存预检、批次血缘和安全撤销
-- Real AI Core：OpenAI-compatible Provider、24 个只读业务工具、多轮对话、全局 Copilot、页面上下文分析与完整运行审计
+- Real AI Core：OpenAI-compatible Provider、24 个只读业务工具、多轮对话、全局 Copilot、页面上下文分析、数字溯源、限流与完整运行审计
 
 ## 技术架构
 
@@ -113,6 +113,8 @@ docs/                    权限、测试、部署与版本状态
 - [AI Provider 兼容性](docs/AI-PROVIDER-COMPATIBILITY.md)
 - [AI 工具清单](docs/AI-TOOLS.md)
 - [AI 安全边界](docs/AI-SECURITY.md)
+- [V1.5 老板端体验说明](docs/V1.5-EXECUTIVE-UX.md)
+- [AI 加固说明](docs/AI-HARDENING.md)
 - [完成情况、已知问题与二期建议](docs/STATUS.md)
 
 ## 数据备份

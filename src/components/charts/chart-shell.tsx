@@ -31,6 +31,11 @@ export function MoneyTooltip({ active, payload, label }: { active?: boolean; pay
   return <div className="chart-tooltip"><div className="chart-tooltip-title">{label}</div>{payload.map((entry) => <div className="chart-tooltip-row" key={String(entry.dataKey ?? entry.name)}><span><i className="chart-dot" style={{ display: "inline-block", marginRight: 6, backgroundColor: entry.color }} />{entry.name}</span><strong>{formatMoney(Number(entry.value), true)}</strong></div>)}</div>;
 }
 
+export function DrilldownTooltip({ active, payload, label, note }: { active?: boolean; payload?: readonly ChartTooltipEntry[]; label?: string | number; note?: string }) {
+  if (!active || !payload?.length) return null;
+  return <div className="chart-tooltip drilldown-tooltip"><div className="chart-tooltip-title">{label}</div>{payload.map((entry) => <div className="chart-tooltip-row" key={String(entry.dataKey ?? entry.name)}><span><i className="chart-dot" style={{ display: "inline-block", marginRight: 6, backgroundColor: entry.color }} />{entry.name}</span><strong>{formatMoney(Number(entry.value), true)}</strong></div>)}{note ? <div className="chart-tooltip-note">{note}</div> : null}</div>;
+}
+
 export function PercentageTooltip({ active, payload, label }: { active?: boolean; payload?: readonly ChartTooltipEntry[]; label?: string | number }) {
   if (!active || !payload?.length) return null;
   return <div className="chart-tooltip"><div className="chart-tooltip-title">{label}</div>{payload.map((entry) => <div className="chart-tooltip-row" key={String(entry.dataKey ?? entry.name)}><span><i className="chart-dot" style={{ display: "inline-block", marginRight: 6, backgroundColor: entry.color }} />{entry.name}</span><strong>{Number(entry.value)}%</strong></div>)}</div>;

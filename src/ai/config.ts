@@ -10,7 +10,16 @@ export type AIConfig = {
   store: false;
   timeoutMs: number;
   configured: boolean;
+  minuteRequestLimit: number;
+  dailyRequestLimit: number;
+  dailyTokenLimit: number;
+  ownerLimitMultiplier: number;
 };
+
+function positiveInteger(value: string | undefined, fallback: number) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 function parseMode(value: string | undefined): AIAPIMode {
   return value === "responses" || value === "chat" ? value : "auto";
@@ -34,5 +43,9 @@ export function getAIConfig(): AIConfig {
     store: false,
     timeoutMs: Math.max(1_000, Number(process.env.AI_TIMEOUT_MS) || 60_000),
     configured: Boolean(apiKey),
+    minuteRequestLimit: positiveInteger(process.env.AI_RATE_LIMIT_PER_MINUTE, 6),
+    dailyRequestLimit: positiveInteger(process.env.AI_DAILY_REQUEST_LIMIT, 100),
+    dailyTokenLimit: positiveInteger(process.env.AI_DAILY_TOKEN_LIMIT, 200_000),
+    ownerLimitMultiplier: positiveInteger(process.env.AI_OWNER_LIMIT_MULTIPLIER, 5),
   };
 }

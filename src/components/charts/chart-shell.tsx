@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { ChartNoAxesCombined } from "lucide-react";
 import { formatMoney } from "@/lib/format";
 
@@ -8,15 +8,17 @@ export type ChartLegendItem = { label: string; color: string };
 export type ChartTooltipEntry = { name?: string; value?: number | string; color?: string; dataKey?: string | number };
 
 export function useReducedMotion() {
-  const [reduced, setReduced] = useState(false);
-  useEffect(() => {
-    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const update = () => setReduced(media.matches);
-    update();
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
-  return reduced;
+  return useSyncExternalStore(
+    (onChange) => {
+      const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+      media.addEventListener("change", onChange);
+      return () => media.removeEventListener("change", onChange);
+    },
+    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    // Start conservatively during SSR/hydration so reduced-motion users never
+    // receive a transient JavaScript chart animation.
+    () => true,
+  );
 }
 export function ChartEmpty({ title = "暂无可视化数据", detail = "完成相关业务记录后，这里会自动生成趋势。" }: { title?: string; detail?: string }) {
   return <div className="chart-empty"><ChartNoAxesCombined aria-hidden="true" /><strong>{title}</strong><span>{detail}</span></div>;

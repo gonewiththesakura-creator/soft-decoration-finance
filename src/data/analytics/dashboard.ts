@@ -4,7 +4,7 @@ import { can } from "@/lib/permissions";
 import { buildCashflowForecast, groupCashflowByWeek } from "./cashflow";
 import { calculateProjectHealth, percentage } from "./health";
 import { analyticsScope } from "./scope";
-import type { BucketPoint } from "./types";
+import type { BucketPoint, CashflowDrilldownItem, ExecutiveDashboardDetails } from "./types";
 import type { DailyFlow } from "./cashflow";
 
 type ProjectHealthRow = {
@@ -22,6 +22,21 @@ type ProjectHealthRow = {
 };
 
 type OrderedBucket = BucketPoint & { sortOrder: number };
+
+type DatedCashflowDrilldownItem = CashflowDrilldownItem & { date: string };
+
+type OverduePresentationRow = {
+  customerCount: number;
+  maxCustomerName: string | null;
+  maxAmountCents: number;
+  longestOverdueDays: number;
+};
+
+type MissingInvoicePresentationRow = {
+  supplierCount: number;
+  maxSupplierName: string | null;
+  maxAmountCents: number;
+};
 
 function calculateOperationalHealth(row: ProjectHealthRow) {
   const reasons: string[] = [];
@@ -45,10 +60,14 @@ export async function getDashboardAnalytics(user: SessionUser, selectedCompanyId
   const projectScope = analyticsScope(user, selectedCompanyId, "p", "p.id");
   const receivableScope = analyticsScope(user, selectedCompanyId, "rp", "rp.project_id");
   const payableScope = analyticsScope(user, selectedCompanyId, "y", "y.project_id");
+  const accountScope = analyticsScope(user, selectedCompanyId, "a");
+  const balanceAccess = user.role === "owner" || user.role === "finance";
+  const receivableAccess = can(user, "receivables");
+  const payableAccess = can(user, "payables");
   const financialProjectAccess = user.role === "owner" || user.role === "finance" || user.role === "project_manager";
   const operationalProjectAccess = can(user, "purchase-orders") && can(user, "budgets");
 
-  const [dailyFlows, projectRows, receivableAgingRows, payableMaturityRows] = await Promise.all([
+  const [dailyFlows, projectRows, receivableAgingRows, payableMaturityRows, topAccounts, overduePresentationRows, missingInvoicePresentationRows, topReceivables, topPayables] = await Promise.all([
     startingBalanceCents === null ? Promise.resolve([] as DailyFlow[]) : sqlQuery<DailyFlow>(`WITH days AS (
       SELECT generate_series(current_date,current_date+interval '29 day',interval '1 day')::date AS day
     ), flows AS (
@@ -70,20 +89,66 @@ export async function getDashboardAnalytics(user: SessionUser, selectedCompanyId
       (SELECT COALESCE(sum(ia.amount_cents),0)::float8 FROM invoice_allocations ia JOIN invoices i ON i.id=ia.invoice_id WHERE ia.project_id=p.id AND i.direction='进项' AND NOT i.is_void) AS "purchaseInvoicedCents",
       (SELECT COALESCE(sum(rp.amount_cents-rp.received_cents),0)::float8 FROM receivable_plans rp WHERE rp.project_id=p.id AND NOT rp.is_void AND rp.due_date<current_date AND rp.received_cents<rp.amount_cents) AS "overdueReceivableCents"
     FROM projects p WHERE ${projectScope.clause} AND p.status NOT IN ('质保关闭','已取消') ORDER BY p.id`, projectScope.params),
-    can(user, "receivables") ? sqlQuery<OrderedBucket>(`SELECT CASE
+    receivableAccess ? sqlQuery<OrderedBucket>(`SELECT CASE
         WHEN rp.due_date>=current_date THEN '未到期' WHEN rp.due_date>=current_date-interval '30 day' THEN '0-30 天'
         WHEN rp.due_date>=current_date-interval '60 day' THEN '31-60 天' WHEN rp.due_date>=current_date-interval '90 day' THEN '61-90 天' ELSE '90+ 天' END AS label,
       CASE WHEN rp.due_date>=current_date THEN 0 WHEN rp.due_date>=current_date-interval '30 day' THEN 1 WHEN rp.due_date>=current_date-interval '60 day' THEN 2 WHEN rp.due_date>=current_date-interval '90 day' THEN 3 ELSE 4 END AS "sortOrder",
       sum(rp.amount_cents-rp.received_cents)::float8 AS "valueCents" FROM receivable_plans rp WHERE ${receivableScope.clause} AND NOT rp.is_void AND NOT rp.is_warranty AND rp.received_cents<rp.amount_cents GROUP BY label,"sortOrder" ORDER BY "sortOrder"`, receivableScope.params) : Promise.resolve([] as OrderedBucket[]),
-    can(user, "payables") ? sqlQuery<OrderedBucket>(`SELECT CASE
+    payableAccess ? sqlQuery<OrderedBucket>(`SELECT CASE
         WHEN y.due_date<current_date THEN '已逾期' WHEN y.due_date<=current_date+interval '7 day' THEN '7 天内'
         WHEN y.due_date<=current_date+interval '15 day' THEN '8-15 天' WHEN y.due_date<=current_date+interval '30 day' THEN '16-30 天' ELSE '30 天以后' END AS label,
       CASE WHEN y.due_date<current_date THEN 0 WHEN y.due_date<=current_date+interval '7 day' THEN 1 WHEN y.due_date<=current_date+interval '15 day' THEN 2 WHEN y.due_date<=current_date+interval '30 day' THEN 3 ELSE 4 END AS "sortOrder",
       sum(y.amount_cents-y.paid_cents)::float8 AS "valueCents" FROM payables y WHERE ${payableScope.clause} AND NOT y.is_void AND y.paid_cents<y.amount_cents GROUP BY label,"sortOrder" ORDER BY "sortOrder"`, payableScope.params) : Promise.resolve([] as OrderedBucket[]),
+    balanceAccess && startingBalanceCents !== null ? sqlQuery<NonNullable<ExecutiveDashboardDetails["topAccount"]>>(`SELECT a.id,a.name AS "accountName",c.name AS "companyName",a.balance_cents::float8 AS "balanceCents"
+      FROM company_accounts a JOIN companies c ON c.id=a.company_id
+      WHERE ${accountScope.clause} AND a.status='active'
+      ORDER BY a.balance_cents DESC,a.id LIMIT 1`, accountScope.params) : Promise.resolve([]),
+    receivableAccess ? sqlQuery<OverduePresentationRow>(`WITH overdue_customers AS (
+        SELECT c.id,c.name,sum(rp.amount_cents-rp.received_cents)::float8 AS amount_cents,max((current_date-rp.due_date::date)::int)::int AS longest_days
+        FROM receivable_plans rp JOIN projects p ON p.id=rp.project_id JOIN customers c ON c.id=p.customer_id
+        WHERE ${receivableScope.clause} AND NOT rp.is_void AND NOT rp.is_warranty AND rp.received_cents<rp.amount_cents AND rp.due_date<current_date
+        GROUP BY c.id,c.name
+      )
+      SELECT count(*)::int AS "customerCount",(array_agg(name ORDER BY amount_cents DESC,id))[1] AS "maxCustomerName",
+        COALESCE(max(amount_cents),0)::float8 AS "maxAmountCents",COALESCE(max(longest_days),0)::int AS "longestOverdueDays"
+      FROM overdue_customers`, receivableScope.params) : Promise.resolve([] as OverduePresentationRow[]),
+    payableAccess ? sqlQuery<MissingInvoicePresentationRow>(`WITH supplier_gaps AS (
+        SELECT s.id,s.name,sum(GREATEST(y.amount_cents-COALESCE((SELECT sum(ia.amount_cents) FROM invoice_allocations ia WHERE ia.payable_id=y.id),0),0))::float8 AS amount_cents
+        FROM payables y JOIN suppliers s ON s.id=y.supplier_id
+        WHERE ${payableScope.clause} AND NOT y.is_void
+        GROUP BY s.id,s.name
+        HAVING sum(GREATEST(y.amount_cents-COALESCE((SELECT sum(ia.amount_cents) FROM invoice_allocations ia WHERE ia.payable_id=y.id),0),0))>0
+      )
+      SELECT count(*)::int AS "supplierCount",(array_agg(name ORDER BY amount_cents DESC,id))[1] AS "maxSupplierName",
+        COALESCE(max(amount_cents),0)::float8 AS "maxAmountCents"
+      FROM supplier_gaps`, payableScope.params) : Promise.resolve([] as MissingInvoicePresentationRow[]),
+    startingBalanceCents !== null && receivableAccess ? sqlQuery<DatedCashflowDrilldownItem>(`SELECT DISTINCT ON (rp.due_date::date) rp.due_date::date::text AS date,rp.id,rp.project_id AS "projectId",p.name AS "projectName",c.name AS counterparty,
+        (rp.amount_cents-rp.received_cents)::float8 AS "amountCents"
+      FROM receivable_plans rp JOIN projects p ON p.id=rp.project_id JOIN customers c ON c.id=p.customer_id
+      WHERE ${receivableScope.clause} AND NOT rp.is_void AND NOT rp.is_warranty AND rp.received_cents<rp.amount_cents
+        AND rp.due_date::date BETWEEN current_date AND current_date+interval '29 day'
+      ORDER BY rp.due_date::date,"amountCents" DESC,rp.id`, receivableScope.params) : Promise.resolve([] as DatedCashflowDrilldownItem[]),
+    startingBalanceCents !== null && payableAccess ? sqlQuery<DatedCashflowDrilldownItem>(`SELECT DISTINCT ON (y.due_date::date) y.due_date::date::text AS date,y.id,y.project_id AS "projectId",p.name AS "projectName",s.name AS counterparty,
+        (y.amount_cents-y.paid_cents)::float8 AS "amountCents"
+      FROM payables y JOIN projects p ON p.id=y.project_id JOIN suppliers s ON s.id=y.supplier_id
+      WHERE ${payableScope.clause} AND NOT y.is_void AND y.paid_cents<y.amount_cents
+        AND y.due_date::date BETWEEN current_date AND current_date+interval '29 day'
+      ORDER BY y.due_date::date,"amountCents" DESC,y.id`, payableScope.params) : Promise.resolve([] as DatedCashflowDrilldownItem[]),
   ]);
 
-  const cashflow = startingBalanceCents === null ? [] : buildCashflowForecast(startingBalanceCents, dailyFlows);
-  const projectHealth = operationalProjectAccess ? projectRows.map((row) => {
+  const topReceivableByDate = new Map(topReceivables.map(({ date, ...item }) => [date, item]));
+  const topPayableByDate = new Map(topPayables.map(({ date, ...item }) => [date, item]));
+  const cashflow = startingBalanceCents === null ? [] : buildCashflowForecast(startingBalanceCents, dailyFlows).map((point) => ({
+    ...point,
+    topReceivable: topReceivableByDate.get(point.date) ?? null,
+    topPayable: topPayableByDate.get(point.date) ?? null,
+    riskMessage: point.balanceCents < 0
+      ? "预计余额低于 0，需提前安排回款或调整付款"
+      : point.payableCents > point.receivableCents && point.payableCents > 0
+        ? "当日预计付款高于收款，注意资金净流出"
+        : null,
+  }));
+  const allProjectHealth = operationalProjectAccess ? projectRows.map((row) => {
     const health = financialProjectAccess ? calculateProjectHealth(row) : calculateOperationalHealth(row);
     const common = {
       id: row.id,
@@ -100,13 +165,23 @@ export async function getDashboardAnalytics(user: SessionUser, selectedCompanyId
       overBudgetCents: Math.max(0, row.orderedCents - row.budgetCents),
     };
     return financialProjectAccess ? { ...common, collectionRate: percentage(row.receivedCents, row.contractCents), contractCents: row.contractCents, receivedCents: row.receivedCents, paidCents: row.paidCents } : common;
-  }).sort((a, b) => a.score - b.score).slice(0, 6) : [];
+  }).sort((a, b) => a.score - b.score) : [];
+  const projectHealth = allProjectHealth.slice(0, 6);
+
+  const executiveDetails: ExecutiveDashboardDetails = {
+    topAccount: balanceAccess ? topAccounts[0] ?? null : null,
+    overdue: receivableAccess ? overduePresentationRows[0] ?? { customerCount: 0, maxCustomerName: null, maxAmountCents: 0, longestOverdueDays: 0 } : null,
+    missingInvoices: payableAccess ? missingInvoicePresentationRows[0] ?? { supplierCount: 0, maxSupplierName: null, maxAmountCents: 0 } : null,
+  };
 
   return {
     cashflow,
     weeklyCashflow: groupCashflowByWeek(cashflow),
     projectHealth,
+    projectHealthAccessible: operationalProjectAccess,
+    projectRiskCount: operationalProjectAccess ? allProjectHealth.filter((project) => project.tone !== "healthy").length : null,
     receivableAging: receivableAgingRows.map(({ label, valueCents }) => ({ label, valueCents })),
     payableMaturity: payableMaturityRows.map(({ label, valueCents }) => ({ label, valueCents })),
+    executiveDetails,
   };
 }

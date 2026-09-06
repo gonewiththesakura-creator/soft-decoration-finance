@@ -1,0 +1,251 @@
+/* Dashboard-level light field. This layer is decorative and never captures input. */
+.executive-ambient-background {
+  position: relative;
+  min-height: calc(100vh - 72px);
+  overflow: hidden;
+  isolation: isolate;
+  background: #f4f5f1;
+}
+
+.executive-ambient-content {
+  position: relative;
+  z-index: 1;
+}
+
+.executive-ambient-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.executive-ambient-mesh {
+  position: absolute;
+  inset: -14%;
+  opacity: 0.92;
+  background-image:
+    radial-gradient(circle at 8% 5%, rgba(41, 89, 75, 0.09), transparent 31%),
+    radial-gradient(circle at 91% 10%, rgba(200, 170, 106, 0.1), transparent 29%),
+    radial-gradient(circle at 49% 58%, rgba(111, 159, 153, 0.065), transparent 36%);
+  background-size: 145% 145%, 160% 160%, 180% 180%;
+  background-repeat: no-repeat;
+}
+
+.executive-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(120px);
+  will-change: transform, opacity;
+}
+
+.executive-orb-forest {
+  top: -280px;
+  left: -250px;
+  width: 820px;
+  height: 820px;
+  opacity: 0.1;
+  background: #355f53;
+}
+
+.executive-orb-champagne {
+  top: 220px;
+  right: -360px;
+  width: 900px;
+  height: 900px;
+  opacity: 0.08;
+  background: #c8aa6a;
+}
+
+.executive-orb-cyan {
+  top: 1050px;
+  left: 35%;
+  width: 720px;
+  height: 720px;
+  opacity: 0.075;
+  background: #6f9f99;
+}
+
+.executive-orb-neutral {
+  bottom: -270px;
+  left: -150px;
+  width: 780px;
+  height: 780px;
+  opacity: 0.1;
+  background: #b7b3aa;
+}
+
+.executive-ambient-grid {
+  position: absolute;
+  inset: 0;
+  opacity: 0.22;
+  background-image:
+    linear-gradient(rgba(43, 80, 67, 0.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(43, 80, 67, 0.018) 1px, transparent 1px);
+  background-size: 72px 72px;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.8), transparent 82%);
+}
+
+.executive-dashboard {
+  position: relative;
+  background: transparent;
+}
+
+.executive-hero {
+  background: #173a32;
+  box-shadow: 0 24px 58px rgba(20, 43, 35, 0.2);
+}
+
+.executive-hero-visual {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.executive-hero-mesh {
+  position: absolute;
+  inset: -34%;
+  opacity: 0.98;
+  background-image:
+    radial-gradient(circle at 8% 20%, rgba(112, 170, 148, 0.34), transparent 30%),
+    radial-gradient(circle at 88% 4%, rgba(200, 170, 106, 0.28), transparent 28%),
+    radial-gradient(circle at 61% 92%, rgba(111, 159, 153, 0.22), transparent 35%),
+    linear-gradient(118deg, #173a32 0%, #243f37 58%, #454b41 100%);
+  background-size: 150% 160%, 175% 165%, 190% 180%, 100% 100%;
+  background-repeat: no-repeat;
+  will-change: background-position;
+}
+
+.executive-hero-glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(82px);
+  will-change: transform, opacity;
+}
+
+.executive-hero-glow-sage {
+  top: -130px;
+  left: 22%;
+  width: 430px;
+  height: 330px;
+  opacity: 0.18;
+  background: #76a697;
+}
+
+.executive-hero-glow-gold {
+  right: -100px;
+  bottom: -170px;
+  width: 460px;
+  height: 390px;
+  opacity: 0.16;
+  background: #c8aa6a;
+}
+
+.executive-hero-grid {
+  position: absolute;
+  inset: -18px;
+  opacity: 0.24;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.038) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0.9), transparent 86%);
+  will-change: transform, opacity;
+}
+
+.executive-flow-lines {
+  position: absolute;
+  inset: 0;
+  width: calc(100% + 32px);
+  height: 100%;
+  opacity: 0.48;
+  overflow: visible;
+  will-change: transform, opacity;
+}
+
+.executive-flow-lines path {
+  fill: none;
+  stroke: url(#executive-flow-gradient);
+  stroke-width: 0.85;
+  stroke-linecap: round;
+  stroke-dasharray: 9 14;
+  opacity: 0.16;
+  vector-effect: non-scaling-stroke;
+}
+
+.executive-flow-lines path:nth-of-type(2) {
+  opacity: 0.12;
+}
+
+.executive-flow-lines path:nth-of-type(3) {
+  opacity: 0.09;
+}
+
+@media (max-width: 1100px) {
+  .executive-orb {
+    width: 600px;
+    height: 600px;
+    filter: blur(108px);
+  }
+
+  .executive-orb-cyan {
+    display: none;
+  }
+
+  .executive-hero-glow {
+    transform: scale(0.82);
+  }
+}
+
+@media (max-width: 720px) {
+  .executive-ambient-background {
+    min-height: calc(100vh - 58px);
+  }
+
+  .executive-orb {
+    width: 430px;
+    height: 430px;
+    filter: blur(94px);
+  }
+
+  .executive-orb-forest {
+    top: -180px;
+    left: -220px;
+  }
+
+  .executive-orb-champagne {
+    top: 680px;
+    right: -250px;
+  }
+
+  .executive-orb-cyan,
+  .executive-orb-neutral,
+  .executive-ambient-grid,
+  .executive-hero-grid,
+  .executive-flow-lines {
+    display: none;
+  }
+
+  .executive-hero-glow {
+    width: 330px;
+    height: 280px;
+    filter: blur(70px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .executive-ambient-mesh,
+  .executive-hero-mesh {
+    background-position: 0% 18%, 100% 0%, 50% 100%;
+  }
+
+  .executive-orb,
+  .executive-hero-glow,
+  .executive-flow-lines,
+  .executive-ambient-grid,
+  .executive-hero-grid {
+    will-change: auto;
+  }
+}

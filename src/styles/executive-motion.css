@@ -1,0 +1,225 @@
+:root {
+  --motion-ambient-slow: 36s;
+  --motion-ambient-medium: 24s;
+  --motion-breathe: 8s;
+  --motion-chart: 780ms;
+  --motion-hover: 160ms;
+  --motion-tooltip: 150ms;
+  --motion-reveal: 360ms;
+}
+
+@keyframes executive-mesh-drift {
+  0%, 100% { background-position: 0% 18%, 100% 0%, 50% 100%; }
+  50% { background-position: 11% 26%, 88% 10%, 44% 88%; }
+}
+
+@keyframes executive-orb-forest-drift {
+  0%, 100% { opacity: 0.1; transform: translate3d(0, 0, 0) scale(1); }
+  50% { opacity: 0.15; transform: translate3d(9%, 7%, 0) scale(1.06); }
+}
+
+@keyframes executive-orb-gold-drift {
+  0%, 100% { opacity: 0.08; transform: translate3d(0, 0, 0) scale(0.98); }
+  48% { opacity: 0.13; transform: translate3d(-8%, 10%, 0) scale(1.05); }
+}
+
+@keyframes executive-orb-cyan-drift {
+  0%, 100% { opacity: 0.075; transform: translate3d(0, 0, 0) scale(1); }
+  52% { opacity: 0.12; transform: translate3d(-7%, -8%, 0) scale(1.08); }
+}
+
+@keyframes executive-orb-neutral-drift {
+  0%, 100% { opacity: 0.1; transform: translate3d(0, 0, 0); }
+  50% { opacity: 0.14; transform: translate3d(5%, -7%, 0); }
+}
+
+@keyframes executive-grid-drift {
+  0%, 100% { opacity: 0.22; transform: translate3d(0, 0, 0); }
+  50% { opacity: 0.3; transform: translate3d(12px, 8px, 0); }
+}
+
+@keyframes executive-hero-mesh-drift {
+  0%, 100% { background-position: 0% 0%, 100% 12%, 38% 100%, 0% 0%; }
+  50% { background-position: 9% 15%, 88% 2%, 54% 84%, 100% 0%; }
+}
+
+@keyframes executive-hero-glow-drift {
+  0%, 100% { opacity: 0.18; transform: translate3d(0, 0, 0) scale(1); }
+  50% { opacity: 0.3; transform: translate3d(-7%, 7%, 0) scale(1.08); }
+}
+
+@keyframes executive-flow-drift {
+  0%, 100% { opacity: 0.42; transform: translate3d(0, 0, 0); }
+  50% { opacity: 0.7; transform: translate3d(-16px, 5px, 0); }
+}
+
+@keyframes executive-flow-path {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: -46; }
+}
+
+@keyframes executive-status-ring {
+  0%, 72%, 100% { opacity: 0; transform: scale(1); }
+  18% { opacity: 0.34; transform: scale(1); }
+  58% { opacity: 0; transform: scale(1.45); }
+}
+
+@keyframes executive-ai-halo {
+  0%, 68%, 100% { opacity: 0; transform: scale(0.99); }
+  22% { opacity: 0.32; transform: scale(1); }
+  52% { opacity: 0; transform: scale(1.055); }
+}
+
+@keyframes executive-kpi-glow {
+  0%, 100% { opacity: 0.34; transform: scale(1); }
+  50% { opacity: 0.58; transform: scale(1.025); }
+}
+
+@keyframes executive-mini-bar-enter {
+  from { opacity: 0.24; transform: scaleY(0.08); }
+  to { opacity: 0.62; transform: scaleY(1); }
+}
+
+@keyframes executive-risk-ambient {
+  0%, 100% { opacity: 0.11; transform: translate3d(0, 0, 0) scale(1); }
+  50% { opacity: 0.2; transform: translate3d(-4%, 5%, 0) scale(1.05); }
+}
+
+.executive-ambient-mesh {
+  animation: executive-mesh-drift var(--motion-ambient-slow) ease-in-out infinite;
+}
+
+.executive-orb-forest {
+  animation: executive-orb-forest-drift 22s ease-in-out infinite;
+}
+
+.executive-orb-champagne {
+  animation: executive-orb-gold-drift 31s ease-in-out infinite;
+}
+
+.executive-orb-cyan {
+  animation: executive-orb-cyan-drift 27s ease-in-out infinite;
+}
+
+.executive-orb-neutral {
+  animation: executive-orb-neutral-drift 36s ease-in-out infinite;
+}
+
+.executive-ambient-grid,
+.executive-hero-grid {
+  animation: executive-grid-drift 29s ease-in-out infinite;
+}
+
+.executive-hero-mesh {
+  animation: executive-hero-mesh-drift 26s ease-in-out infinite;
+}
+
+.executive-hero-glow-sage {
+  animation: executive-hero-glow-drift 19s ease-in-out infinite;
+}
+
+.executive-hero-glow-gold {
+  animation: executive-hero-glow-drift 28s ease-in-out -7s infinite reverse;
+}
+
+.executive-flow-lines {
+  animation: executive-flow-drift 21s ease-in-out infinite;
+}
+
+.executive-flow-lines path:nth-of-type(2) {
+  animation: executive-flow-path 17s linear -5s infinite reverse;
+}
+
+.executive-flow-lines path:nth-of-type(3) {
+  animation: executive-flow-path 24s linear -9s infinite;
+}
+
+.executive-flow-lines path:nth-of-type(1) {
+  animation: executive-flow-path 21s linear infinite;
+}
+
+.executive-hero-meta .status-attention i::after,
+.executive-hero-meta .status-steady i::after {
+  animation: executive-status-ring 4.6s ease-out infinite;
+}
+
+.executive-hero-meta .executive-ai-status:not(.is-unavailable) i::after {
+  animation: executive-status-ring 4.1s ease-out -1.2s infinite;
+}
+
+.executive-ai-button.button::before {
+  animation: executive-ai-halo 9s ease-out infinite;
+}
+
+.executive-metric.primary .executive-metric-glow {
+  animation: executive-kpi-glow 10.5s ease-in-out infinite;
+}
+
+.executive-metric.primary:nth-child(2) .executive-metric-glow {
+  animation-delay: -4.5s;
+}
+
+.kpi-mini-trend i {
+  animation: executive-mini-bar-enter 620ms var(--ease-out) var(--mini-bar-delay) both;
+  transition: opacity var(--motion-hover) var(--ease-out), transform var(--motion-hover) var(--ease-out);
+}
+
+.executive-hover-detail {
+  transition: opacity var(--motion-tooltip) var(--ease-out), transform var(--motion-tooltip) var(--ease-out), visibility var(--motion-tooltip);
+}
+
+.executive-action-center::before {
+  animation: executive-risk-ambient 9.5s ease-in-out infinite;
+}
+
+.executive-action-hover,
+.executive-action-copy > small {
+  transition: opacity var(--motion-tooltip) var(--ease-out), transform var(--motion-tooltip) var(--ease-out), visibility var(--motion-tooltip);
+}
+
+.executive-reveal {
+  transition: opacity var(--motion-reveal) var(--ease-out), transform var(--motion-reveal) var(--ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .executive-ambient-background *,
+  .executive-ambient-background *::before,
+  .executive-ambient-background *::after,
+  .executive-hero *,
+  .executive-hero *::before,
+  .executive-hero *::after,
+  .executive-metric *,
+  .executive-metric *::before,
+  .executive-metric *::after,
+  .executive-action-center *,
+  .executive-action-center *::before,
+  .executive-action-center *::after {
+    animation: none !important;
+  }
+
+  .executive-metric,
+  .executive-action-list > a,
+  .executive-hover-detail,
+  .executive-action-hover,
+  .executive-action-copy > small,
+  .executive-reveal {
+    transition: none !important;
+  }
+
+  .executive-reveal[data-reveal] {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .executive-ambient-mesh,
+  .executive-orb,
+  .executive-hero-mesh,
+  .executive-hero-glow,
+  .executive-flow-lines,
+  .executive-ambient-grid,
+  .executive-hero-grid,
+  .executive-metric-glow,
+  .executive-action-center::before {
+    transform: none !important;
+  }
+}

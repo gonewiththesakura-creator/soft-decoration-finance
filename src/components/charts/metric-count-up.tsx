@@ -6,11 +6,12 @@ import { useReducedMotion } from "./chart-shell";
 
 export function MetricCountUp({ valueCents, compact = true }: { valueCents: number; compact?: boolean }) {
   const reducedMotion = useReducedMotion();
-  const [display, setDisplay] = useState(reducedMotion ? valueCents : 0);
+  const [display, setDisplay] = useState(valueCents);
   const frame = useRef<number | null>(null);
 
   useEffect(() => {
     if (reducedMotion) { setDisplay(valueCents); return; }
+    setDisplay(0);
     const started = performance.now();
     const tick = (now: number) => {
       const progress = Math.min(1, (now - started) / 650);

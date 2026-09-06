@@ -4,6 +4,9 @@
 @import "../styles/motion.css";
 @import "../styles/charts.css";
 @import "../styles/operating-system.css";
+@import "../styles/executive-ambient.css";
+@import "../styles/executive.css";
+@import "../styles/executive-motion.css";
 
 * { box-sizing: border-box; }
 html { background: var(--canvas); }

@@ -1,0 +1,438 @@
+/* Executive component surfaces and interaction states. Import after operating-system.css. */
+.executive-hero-main,
+.executive-hero .risk-pulse {
+  position: relative;
+  z-index: 2;
+}
+
+.executive-hero::after {
+  opacity: 0;
+}
+
+.executive-hero-meta .executive-ai-status {
+  position: relative;
+  padding: 5px 8px;
+  border: 1px solid rgba(141, 205, 181, 0.28);
+  border-radius: 999px;
+  color: #c9e5da;
+  background: rgba(83, 151, 126, 0.1);
+}
+
+.executive-hero-meta .status-attention i,
+.executive-hero-meta .status-steady i,
+.executive-hero-meta .executive-ai-status i {
+  position: relative;
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  animation: none;
+}
+
+.executive-hero-meta .executive-ai-status i {
+  background: #8fc8b3;
+}
+
+.executive-hero-meta .executive-ai-status.is-unavailable {
+  border-color: rgba(218, 190, 137, 0.24);
+  color: #d9c59b;
+  background: rgba(170, 132, 66, 0.08);
+}
+
+.executive-hero-meta .executive-ai-status.is-unavailable i {
+  background: #c6a664;
+}
+
+.executive-hero-meta .status-attention i::after,
+.executive-hero-meta .status-steady i::after,
+.executive-hero-meta .executive-ai-status i::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border: 1px solid currentColor;
+  border-radius: inherit;
+  opacity: 0;
+}
+
+.executive-ai-button.button {
+  position: relative;
+  isolation: isolate;
+}
+
+.executive-ai-button.button::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  z-index: -1;
+  border: 1px solid rgba(225, 201, 143, 0.42);
+  border-radius: 8px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.risk-pulse {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 18px 42px rgba(6, 21, 17, 0.18);
+}
+
+.risk-pulse-list a {
+  cursor: pointer;
+}
+
+.risk-pulse-list a:hover,
+.risk-pulse-list a:focus-visible {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.risk-pulse-list a:focus-visible {
+  outline: 2px solid rgba(222, 195, 136, 0.82);
+  outline-offset: -2px;
+}
+
+.executive-metric {
+  isolation: isolate;
+  overflow: visible;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.9), 0 8px 22px rgba(35, 56, 48, 0.035);
+}
+
+.executive-metric.primary {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(243, 247, 244, 0.96));
+}
+
+.executive-metric-glow {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  border-radius: inherit;
+  opacity: 0;
+  background:
+    radial-gradient(circle at 88% 10%, rgba(109, 155, 139, 0.23), transparent 46%),
+    radial-gradient(circle at 8% 110%, rgba(200, 170, 106, 0.13), transparent 42%);
+  pointer-events: none;
+}
+
+.executive-metric.primary .executive-metric-glow {
+  opacity: 0.44;
+}
+
+.executive-metric:hover,
+.executive-metric:focus-visible,
+.executive-metric:focus-within {
+  z-index: 9;
+  transform: translateY(-3px);
+  border-color: #9fb4ab;
+  box-shadow: 0 18px 36px rgba(29, 50, 42, 0.13), 0 1px 0 rgba(255, 255, 255, 0.95) inset;
+}
+
+.executive-metric:focus-visible {
+  outline: 2px solid rgba(39, 105, 88, 0.78);
+  outline-offset: 3px;
+}
+
+.executive-metric.disabled {
+  cursor: default;
+}
+
+.executive-metric.disabled[tabindex="0"] {
+  cursor: help;
+}
+
+.executive-metric.disabled:hover,
+.executive-metric.disabled:focus-visible {
+  z-index: 9;
+  transform: translateY(-2px);
+  border-color: #b5c2bc;
+  box-shadow: 0 14px 30px rgba(29, 50, 42, 0.09);
+}
+
+.executive-metric-top svg {
+  padding: 2px;
+  border-radius: 4px;
+  transition: color var(--motion-hover) var(--ease-out), background-color var(--motion-hover) var(--ease-out), transform var(--motion-hover) var(--ease-out);
+}
+
+.executive-metric:hover .executive-metric-top svg,
+.executive-metric:focus-visible .executive-metric-top svg {
+  color: #2d6d5c;
+  background: rgba(89, 138, 121, 0.12);
+  transform: translateY(-1px);
+}
+
+.kpi-mini-trend {
+  align-items: stretch;
+  overflow: hidden;
+}
+
+.kpi-mini-trend i {
+  height: var(--mini-bar-height);
+  margin-top: auto;
+  background: linear-gradient(180deg, #5f8f7f, #a8c1b7);
+  opacity: 0.62;
+  transform: scaleY(1);
+  transform-origin: center bottom;
+}
+
+.executive-metric:hover .kpi-mini-trend i,
+.executive-metric:focus-visible .kpi-mini-trend i {
+  opacity: 1;
+}
+
+.executive-hover-detail {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 8px;
+  right: 8px;
+  z-index: 12;
+  visibility: hidden;
+  padding: 11px 12px;
+  border: 1px solid rgba(144, 162, 154, 0.62);
+  border-radius: 6px;
+  color: var(--ink);
+  background: rgba(252, 253, 251, 0.98);
+  box-shadow: 0 20px 48px rgba(24, 43, 35, 0.16);
+  opacity: 0;
+  transform: translateY(-5px);
+  pointer-events: none;
+}
+
+.executive-hover-detail::before {
+  content: "";
+  position: absolute;
+  top: -5px;
+  left: 20px;
+  width: 8px;
+  height: 8px;
+  border-top: 1px solid rgba(144, 162, 154, 0.62);
+  border-left: 1px solid rgba(144, 162, 154, 0.62);
+  background: inherit;
+  transform: rotate(45deg);
+}
+
+.executive-metric:hover .executive-hover-detail,
+.executive-metric:focus-visible .executive-hover-detail,
+.executive-metric:focus-within .executive-hover-detail {
+  visibility: visible;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.executive-hover-detail > strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--ink-strong);
+  font-size: 9px;
+}
+
+.executive-hover-detail > div {
+  display: grid;
+  gap: 0;
+}
+
+.executive-hover-detail span {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 5px 0;
+  border-top: 1px solid rgba(218, 224, 220, 0.82);
+  color: var(--muted-strong);
+  font-size: 8px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.executive-hover-detail span i {
+  width: 4px;
+  height: 4px;
+  flex: none;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--sage);
+}
+
+.executive-action-center {
+  position: relative;
+  isolation: isolate;
+  background: linear-gradient(150deg, #243a32, #1e312b 72%);
+  box-shadow: 0 18px 44px rgba(25, 46, 38, 0.11);
+}
+
+.executive-action-center::before {
+  content: "";
+  position: absolute;
+  top: -170px;
+  right: -150px;
+  z-index: -1;
+  width: 390px;
+  height: 390px;
+  border-radius: 50%;
+  opacity: 0.15;
+  pointer-events: none;
+}
+
+.executive-action-center.ambient-critical::before {
+  background: radial-gradient(circle, rgba(184, 91, 75, 0.72), rgba(184, 91, 75, 0) 67%);
+}
+
+.executive-action-center.ambient-warning::before {
+  background: radial-gradient(circle, rgba(197, 147, 70, 0.65), rgba(197, 147, 70, 0) 67%);
+}
+
+.executive-action-center.ambient-normal::before {
+  background: radial-gradient(circle, rgba(101, 159, 137, 0.62), rgba(101, 159, 137, 0) 67%);
+}
+
+.executive-action-list > a {
+  height: 104px;
+  cursor: pointer;
+  transition: transform var(--motion-hover) var(--ease-out), background-position var(--motion-hover) var(--ease-out);
+  background-image: linear-gradient(90deg, rgba(255, 255, 255, 0.065), rgba(255, 255, 255, 0));
+  background-position: -360px 0;
+  background-repeat: no-repeat;
+}
+
+.executive-action-list > a:hover,
+.executive-action-list > a:focus-visible {
+  background-color: transparent;
+  background-position: 0 0;
+  transform: translateX(2px);
+}
+
+.executive-action-copy > small {
+  transform: translateY(0);
+}
+
+.executive-action-hover {
+  left: 32px;
+  right: 18px;
+  bottom: 9px;
+  display: grid;
+  gap: 2px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.executive-action-hover span {
+  min-width: 0;
+  display: block;
+  overflow: visible;
+  color: #bed0c9;
+  font-size: 7px;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.executive-action-hover span b {
+  display: inline;
+  margin-right: 6px;
+  color: #eed8ac;
+  font-size: 7px;
+  font-style: normal;
+}
+
+.executive-action-list > a:hover .executive-action-hover,
+.executive-action-list > a:focus-visible .executive-action-hover {
+  visibility: visible;
+}
+
+.executive-action-list > a:hover .executive-action-copy > small,
+.executive-action-list > a:focus-visible .executive-action-copy > small {
+  opacity: 0;
+  transform: translateY(-2px);
+}
+
+.executive-section {
+  box-shadow: 0 10px 30px rgba(31, 51, 43, 0.035);
+}
+
+.executive-reveal[data-reveal="pending"] {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+.executive-reveal[data-reveal="visible"] {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.cashflow-command {
+  border-color: #d2d9d4;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 249, 247, 0.98));
+  box-shadow: 0 18px 44px rgba(29, 50, 42, 0.07);
+}
+
+.executive-ai-brief .ai-insight-panel {
+  border-left-color: #6f9f99;
+  background:
+    radial-gradient(circle at 92% 0%, rgba(111, 159, 153, 0.13), transparent 35%),
+    linear-gradient(130deg, rgba(251, 253, 251, 0.97), rgba(244, 248, 246, 0.94));
+  box-shadow: inset 0 0 0 1px rgba(176, 192, 184, 0.72), 0 14px 38px rgba(29, 50, 42, 0.045);
+}
+
+.project-health-surface {
+  background: rgba(249, 251, 248, 0.96);
+}
+
+.fund-structure-surface {
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.94), rgba(244, 245, 241, 0.94));
+}
+
+.structure-surface {
+  background: rgba(252, 252, 249, 0.92);
+}
+
+.dashboard-flow-compare {
+  background: linear-gradient(180deg, rgba(251, 252, 249, 0.97), rgba(247, 248, 244, 0.96));
+}
+
+.recent-business {
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.executive-section .panel-link,
+.executive-section a,
+.executive-section button {
+  cursor: pointer;
+}
+
+@media (max-width: 720px) {
+  .executive-metric {
+    overflow: hidden;
+  }
+
+  .executive-hover-detail {
+    position: static;
+    visibility: visible;
+    margin-top: 10px;
+    padding: 8px 0 0;
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 0;
+    opacity: 1;
+    background: transparent;
+    box-shadow: none;
+    transform: none;
+  }
+
+  .executive-hover-detail::before {
+    display: none;
+  }
+
+  .executive-action-list > a {
+    height: auto;
+    min-height: 116px;
+    transform: none;
+  }
+
+  .executive-action-hover {
+    position: static;
+    visibility: visible;
+    margin-top: 6px;
+  }
+
+  .executive-action-copy > small {
+    display: none;
+  }
+}

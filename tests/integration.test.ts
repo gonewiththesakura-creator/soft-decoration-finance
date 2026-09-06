@@ -8,6 +8,7 @@ import { createAttachment, getAttachmentContent, getAttachments, voidAttachment 
 import { getDocumentDetail } from "@/data/document-detail";
 import { getFinanceWorkspace } from "@/data/finance-workspace";
 import { getDashboardData } from "@/data/dashboard";
+import { getDashboardAnalytics } from "@/data/analytics/dashboard";
 import { getCustomerProfile, getSupplierProfile } from "@/data/partners";
 import * as XLSX from "xlsx";
 import { confirmMigrationBatch, createMigrationWorkbook, getMigrationBatch, importMigrationBatch, rollbackMigrationBatch, stageMigrationBatch, suggestedMappings, updateStagingRow } from "@/data/data-migration";
@@ -185,6 +186,25 @@ describe.sequential("business workflow integration", () => {
     expect(data.summary.payable30).toBeNull();
     expect(data.cashflow).toEqual([]);
     expect(data.summary.purchaseRequestAccessible).toBe(true);
+    const analytics = await getDashboardAnalytics({ ...designer, role: "designer" }, designer.companyId, data.summary.balance);
+    expect(analytics.cashflow).toEqual([]);
+    expect(analytics.executiveDetails.topAccount).toBeNull();
+    expect(analytics.executiveDetails.overdue).toBeNull();
+    expect(analytics.executiveDetails.missingInvoices).toBeNull();
+    expect(analytics.projectHealthAccessible).toBe(false);
+    expect(analytics.projectRiskCount).toBeNull();
+  });
+
+  it("builds permission-scoped executive hover details from live data", async () => {
+    const data = await getDashboardData(owner, null);
+    const analytics = await getDashboardAnalytics(owner, null, data.summary.balance);
+    expect(analytics.executiveDetails.topAccount?.balanceCents).toBeGreaterThan(0);
+    expect(analytics.executiveDetails.overdue?.customerCount).toBeGreaterThan(0);
+    expect(analytics.executiveDetails.overdue?.maxAmountCents).toBeGreaterThan(0);
+    expect(analytics.executiveDetails.missingInvoices?.supplierCount).toBeGreaterThan(0);
+    expect(analytics.cashflow.some((point) => point.topReceivable || point.topPayable)).toBe(true);
+    expect(analytics.projectHealthAccessible).toBe(true);
+    expect(analytics.projectRiskCount).toBeGreaterThanOrEqual(analytics.projectHealth.filter((project) => project.tone !== "healthy").length);
   });
 
   it("aggregates customer and supplier profiles from their source documents", async () => {

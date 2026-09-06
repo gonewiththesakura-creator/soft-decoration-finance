@@ -11,7 +11,7 @@ import {
 import type { SessionUser } from "@/lib/auth";
 import { can, roleLabels, type ResourceKey } from "@/lib/permissions";
 import { logoutAction, setCompanyScope } from "@/app/(app)/actions";
-import { CopilotDrawer } from "@/components/copilot-drawer";
+import { GlobalAIAssistant } from "@/components/ai/global-ai-assistant";
 
 type Company = { id: number; name: string };
 const groups = [
@@ -23,11 +23,11 @@ const groups = [
   { label: "系统", items: [{ href: "/imports", label: "数据迁移中心", icon: FileSpreadsheet, resource: "imports" as ResourceKey }, { href: "/ai/settings", label: "AI 模型设置", icon: Settings2, resource: "companies" as ResourceKey }, { href: "/permissions", label: "权限", icon: LockKeyhole, resource: "users" as ResourceKey }, { href: "/audit-logs", label: "操作日志", icon: History, resource: "audit-logs" as ResourceKey }] },
 ];
 
-export function AppShell({ user, companies, currentScope, children }: { user: SessionUser; companies: Company[]; currentScope: number | null; children: React.ReactNode }) {
-  const pathname = usePathname(); const router = useRouter(); const [open, setOpen] = useState(false); const [copilotOpen, setCopilotOpen] = useState(false); const [, startTransition] = useTransition();
+export function AppShell({ user, companies, currentScope, aiReady, children }: { user: SessionUser; companies: Company[]; currentScope: number | null; aiReady: boolean; children: React.ReactNode }) {
+  const pathname = usePathname(); const router = useRouter(); const [open, setOpen] = useState(false); const [, startTransition] = useTransition();
   function changeScope(value: string) { startTransition(async () => { await setCompanyScope(value); router.refresh(); }); }
   return (
-    <div className="app-shell">
+    <div className="app-shell has-global-ai">
       <aside className={`sidebar ${open ? "open" : ""}`}>
         <div className="brand"><div className="brand-mark">衡</div><div><div className="brand-title">织衡经营财务</div><div className="brand-sub">项目经营中枢</div></div><button className="icon-plain mobile-menu" style={{ marginLeft: "auto" }} onClick={() => setOpen(false)} aria-label="关闭菜单"><X /></button></div>
         <nav className="nav-scroll">{groups.map((group) => {
@@ -37,10 +37,10 @@ export function AppShell({ user, companies, currentScope, children }: { user: Se
         <div className="sidebar-user"><div className="avatar">{user.name.slice(0, 1)}</div><div className="user-meta"><div className="user-name">{user.name}</div><div className="user-role">{roleLabels[user.role]}</div></div><form action={logoutAction}><button className="icon-plain" type="submit" aria-label="退出登录" title="退出登录"><LogOut /></button></form></div>
       </aside>
       <div className="main-column">
-        <header className="topbar"><div className="topbar-left"><button className="icon-plain mobile-menu" onClick={() => setOpen(true)} aria-label="打开菜单"><Menu /></button><div><div className="scope-label">当前数据范围</div>{user.role === "owner" ? <select className="scope-select" value={currentScope ?? "all"} onChange={(event) => changeScope(event.target.value)}><option value="all">集团汇总 · 全部公司</option>{companies.map((company) => <option value={company.id} key={company.id}>{company.name}</option>)}</select> : <div className="scope-select">{companies.find((company) => company.id === user.companyId)?.name ?? "项目范围"}</div>}</div></div><div className="topbar-right"><button className="button copilot-trigger" onClick={() => setCopilotOpen(true)}><Bot />AI Copilot</button><div className="date-chip">{new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric", weekday: "short" }).format(new Date())}</div></div></header>
+        <header className="topbar"><div className="topbar-left"><button className="icon-plain mobile-menu" onClick={() => setOpen(true)} aria-label="打开菜单"><Menu /></button><div><div className="scope-label">当前数据范围</div>{user.role === "owner" ? <select className="scope-select" value={currentScope ?? "all"} onChange={(event) => changeScope(event.target.value)}><option value="all">集团汇总 · 全部公司</option>{companies.map((company) => <option value={company.id} key={company.id}>{company.name}</option>)}</select> : <div className="scope-select">{companies.find((company) => company.id === user.companyId)?.name ?? "项目范围"}</div>}</div></div><div className="topbar-right"><div className="date-chip">{new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric", weekday: "short" }).format(new Date())}</div></div></header>
         {children}
       </div>
-      <CopilotDrawer role={user.role} open={copilotOpen} onClose={() => setCopilotOpen(false)} />
+      <GlobalAIAssistant role={user.role} ready={aiReady} />
     </div>
   );
 }

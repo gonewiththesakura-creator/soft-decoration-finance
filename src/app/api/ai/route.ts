@@ -16,7 +16,7 @@ function parsePageContext(value: unknown): AIPageContext {
   const source = value as Record<string, unknown>;
   const context: AIPageContext = {};
   for (const key of ["pathname", "pageType"] as const) if (typeof source[key] === "string") context[key] = source[key].slice(0, 200);
-  for (const key of ["projectId", "supplierId", "customerId", "purchaseRequestId", "paymentRequestId"] as const) {
+  for (const key of ["projectId", "supplierId", "customerId", "purchaseRequestId", "paymentRequestId", "purchaseOrderId", "receivableId", "payableId", "paymentId", "invoiceId"] as const) {
     const id = Number(source[key]);
     if (Number.isInteger(id) && id > 0) context[key] = id;
   }

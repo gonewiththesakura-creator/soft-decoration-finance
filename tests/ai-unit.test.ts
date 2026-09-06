@@ -6,6 +6,7 @@ import { buildSystemPrompt } from "@/ai/prompts";
 import { getAIToolsForRole } from "@/ai/tools/registry";
 import { applyNumericGrounding } from "@/ai/grounding";
 import type { SessionUser } from "@/lib/auth";
+import { contextFromPathname, contextLabelFromPathname } from "@/lib/ai-client";
 
 const config: AIConfig = { provider: "openai-compatible", baseUrl: "https://provider.test/v1", apiKey: "test-only-key", primaryModel: "primary", fastModel: "fast", apiMode: "auto", store: false, timeoutMs: 5_000, configured: true, minuteRequestLimit: 6, dailyRequestLimit: 100, dailyTokenLimit: 200_000, ownerLimitMultiplier: 5 };
 const request = { model: "primary", instructions: "test", input: [{ type: "message" as const, role: "user" as const, content: "hello" }] };
@@ -114,5 +115,22 @@ describe("AI response and role boundary", () => {
     expect(guarded.response.metrics).toHaveLength(0);
     expect(guarded.response.findings[0].detail).toContain("2 笔");
     expect(guarded.response.findings[0].detail).toContain("[未验证数字已隐藏]");
+  });
+});
+
+describe("global AI page context", () => {
+  it("maps workspaces and business detail routes to the current tool context", () => {
+    expect(contextFromPathname("/dashboard")).toEqual({ pathname: "/dashboard", pageType: "dashboard" });
+    expect(contextFromPathname("/finance-workspace")).toEqual({ pathname: "/finance-workspace", pageType: "finance_workspace" });
+    expect(contextFromPathname("/projects/18")).toEqual({ pathname: "/projects/18", pageType: "project", projectId: 18 });
+    expect(contextFromPathname("/payment-requests/8")).toEqual({ pathname: "/payment-requests/8", pageType: "payment_request", paymentRequestId: 8 });
+    expect(contextFromPathname("/receivables/7")).toEqual({ pathname: "/receivables/7", pageType: "receivable", receivableId: 7 });
+  });
+
+  it("uses the visible entity name for detail context and stable labels for workspaces", () => {
+    expect(contextLabelFromPathname("/projects/18", "杭州酒店项目")).toBe("杭州酒店项目");
+    expect(contextLabelFromPathname("/suppliers/6", "织物研社")).toBe("织物研社");
+    expect(contextLabelFromPathname("/finance-workspace")).toBe("财务工作台");
+    expect(contextLabelFromPathname("/imports")).toBe("数据迁移中心");
   });
 });

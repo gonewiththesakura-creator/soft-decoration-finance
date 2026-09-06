@@ -58,7 +58,7 @@
 .chart-drill-select select { min-height: 30px; padding: 4px 26px 4px 8px; border: 1px solid var(--line); border-radius: 3px; color: var(--ink); background: var(--surface); font-size: 10px; }
 .chart-drill-select select:focus-visible { border-color: var(--sage); outline: 2px solid color-mix(in srgb, var(--sage) 25%, transparent); outline-offset: 2px; }
 .interactive-donut .donut-center { isolation: isolate; }
-.interactive-donut .donut-center::before { content: ""; position: absolute; left: 50%; top: 50%; width: 108px; height: 108px; border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--chart-balance) 8%, transparent), transparent 68%); transform: translate(-50%, -50%); animation: chart-center-breathe 9s ease-in-out infinite; z-index: -1; }
+.interactive-donut .donut-center::before { content: ""; position: absolute; left: 50%; top: 50%; width: 108px; height: 108px; border-radius: 50%; opacity: .52; background: radial-gradient(circle, color-mix(in srgb, var(--chart-balance) 8%, transparent), transparent 68%); transform: translate(-50%, -50%); z-index: -1; }
 .interactive-donut .donut-center small { margin-top: 3px; color: var(--muted); font-size: 8px; font-variant-numeric: tabular-nums; }
 .donut-sector { transition: opacity var(--motion-hover) var(--ease-out), filter var(--motion-hover) var(--ease-out); }
 .donut-sector.is-active { filter: brightness(1.04) drop-shadow(0 1px 3px rgba(23, 60, 51, .2)); }
@@ -74,19 +74,14 @@
 
 @keyframes chart-area-breathe {
   0%, 100% { stop-opacity: .18; }
-  50% { stop-opacity: .28; }
+  50% { stop-opacity: .3; }
 }
 @keyframes chart-point-pulse {
   0% { opacity: .35; transform: scale(.72); }
   58%, 100% { opacity: 0; transform: scale(1.58); }
 }
-@keyframes chart-center-breathe {
-  0%, 100% { opacity: .42; transform: translate(-50%, -50%) scale(.96); }
-  50% { opacity: .72; transform: translate(-50%, -50%) scale(1.04); }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .cashflow-gradient-breath,.cashflow-breathing-area .recharts-area-curve,.cashflow-pulse-ring,.interactive-donut .donut-center::before { animation: none; }
+  .cashflow-gradient-breath,.cashflow-breathing-area .recharts-area-curve,.cashflow-pulse-ring { animation: none; }
   .chart-clickable,.chart-interactive-bar,.donut-sector,.interactive-legend button { transition: none; }
   .cashflow-pulse-ring { opacity: .3; transform: none; }
 }

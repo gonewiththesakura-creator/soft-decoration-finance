@@ -10,10 +10,11 @@ import { AIResponseView } from "./ai-response-view";
 
 type Message = { id?: number; role: "user" | "assistant"; content: string; structuredResponse?: AIStructuredResponse | null };
 type Conversation = { id: number; title: string; messageCount: number; updatedAt: string };
+export type AIAssistantActivity = "idle" | "thinking" | "warning" | "error";
 
 const prompts = ["生成今日经营简报", "哪些客户逾期未付款？", "哪些项目需要优先关注？", "未来 7 天要付多少钱？", "未来 30 天有没有资金缺口？"];
 
-export function AiAssistant({ pageContext = {}, compact = false, role }: { pageContext?: AIPageContext; compact?: boolean; role: SessionUser["role"] }) {
+export function AiAssistant({ pageContext = {}, compact = false, role, focusRequest = 0, onActivityChange }: { pageContext?: AIPageContext; compact?: boolean; role: SessionUser["role"]; focusRequest?: number; onActivityChange?: (activity: AIAssistantActivity) => void }) {
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -23,6 +24,7 @@ export function AiAssistant({ pageContext = {}, compact = false, role }: { pageC
   const [error, setError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const refreshConversations = useCallback(async () => {
     if (compact) return;
@@ -31,6 +33,7 @@ export function AiAssistant({ pageContext = {}, compact = false, role }: { pageC
   }, [compact]);
   useEffect(() => { void refreshConversations(); }, [refreshConversations]);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, status]);
+  useEffect(() => { if (focusRequest > 0) inputRef.current?.focus(); }, [focusRequest]);
 
   async function openConversation(id: number) {
     if (loading) return;
@@ -48,16 +51,18 @@ export function AiAssistant({ pageContext = {}, compact = false, role }: { pageC
   async function ask(value = question) {
     const current = value.trim();
     if (!current || loading) return;
-    setLoading(true); setError(""); setStatus("正在连接 AI 服务..."); setQuestion("");
+    setLoading(true); setError(""); setStatus("正在连接 AI 服务..."); setQuestion(""); onActivityChange?.("thinking");
     setMessages((previous) => [...previous, { role: "user", content: current }]);
     const controller = new AbortController(); abortRef.current = controller;
     try {
       const result = await requestAI({ question: current, conversationId, pageContext, signal: controller.signal, onStatus: setStatus });
       setConversationId(result.conversationId);
       setMessages((previous) => [...previous, { role: "assistant", content: result.response.summary, structuredResponse: result.response }]);
+      onActivityChange?.(result.response.degraded ? "error" : ["warning", "critical"].includes(result.response.severity) ? "warning" : "idle");
       await refreshConversations();
     } catch (reason) {
-      if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "AI 分析失败");
+      if (!controller.signal.aborted) { setError(reason instanceof Error ? reason.message : "AI 分析失败"); onActivityChange?.("error"); }
+      else onActivityChange?.("idle");
     } finally {
       setLoading(false); setStatus(""); abortRef.current = null;
     }
@@ -67,6 +72,7 @@ export function AiAssistant({ pageContext = {}, compact = false, role }: { pageC
     abortRef.current?.abort();
     await fetch("/api/ai/cancel", { method: "POST" });
     setLoading(false); setStatus("");
+    onActivityChange?.("idle");
   }
 
   const roleHint = role === "designer" ? "可查询参与项目的 SKU、预算和采购" : role === "procurement" ? "可查询采购、供应商、应付与欠票" : "可查询当前权限范围内的经营与财务数据";
@@ -79,7 +85,7 @@ export function AiAssistant({ pageContext = {}, compact = false, role }: { pageC
         {loading ? <div className="ai-running"><LoaderCircle className="animate-spin" />{status}</div> : null}
         {error ? <div className="form-error">{error}</div> : null}<div ref={endRef} />
       </div>
-      <div className="ai-input-v14"><textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void ask(); } }} placeholder="输入经营问题，Enter 发送，Shift + Enter 换行" />{loading ? <button className="button danger ai-send" onClick={cancel} aria-label="停止分析"><Square /></button> : <button className="button primary ai-send" onClick={() => ask()} disabled={!question.trim()} aria-label="发送问题"><ArrowUp /></button>}</div>
+      <div className="ai-input-v14"><textarea ref={inputRef} value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void ask(); } }} placeholder="输入经营问题，Enter 发送，Shift + Enter 换行" />{loading ? <button className="button danger ai-send" onClick={cancel} aria-label="停止分析"><Square /></button> : <button className="button primary ai-send" onClick={() => ask()} disabled={!question.trim()} aria-label="发送问题"><ArrowUp /></button>}</div>
     </section>
   </div>;
 }

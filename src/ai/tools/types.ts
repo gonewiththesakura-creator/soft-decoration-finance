@@ -9,6 +9,11 @@ export type AIPageContext = {
   customerId?: number;
   purchaseRequestId?: number;
   paymentRequestId?: number;
+  purchaseOrderId?: number;
+  receivableId?: number;
+  payableId?: number;
+  paymentId?: number;
+  invoiceId?: number;
 };
 export type AIToolContext = {
   user: SessionUser;

@@ -14,23 +14,23 @@
 }
 
 @keyframes executive-orb-forest-drift {
-  0%, 100% { opacity: 0.1; transform: translate3d(0, 0, 0) scale(1); }
-  50% { opacity: 0.15; transform: translate3d(9%, 7%, 0) scale(1.06); }
+  0%, 100% { opacity: 0.13; transform: translate3d(0, 0, 0) scale(1); }
+  50% { opacity: 0.2; transform: translate3d(9%, 7%, 0) scale(1.06); }
 }
 
 @keyframes executive-orb-gold-drift {
-  0%, 100% { opacity: 0.08; transform: translate3d(0, 0, 0) scale(0.98); }
-  48% { opacity: 0.13; transform: translate3d(-8%, 10%, 0) scale(1.05); }
+  0%, 100% { opacity: 0.11; transform: translate3d(0, 0, 0) scale(0.98); }
+  48% { opacity: 0.18; transform: translate3d(-8%, 10%, 0) scale(1.05); }
 }
 
 @keyframes executive-orb-cyan-drift {
-  0%, 100% { opacity: 0.075; transform: translate3d(0, 0, 0) scale(1); }
-  52% { opacity: 0.12; transform: translate3d(-7%, -8%, 0) scale(1.08); }
+  0%, 100% { opacity: 0.1; transform: translate3d(0, 0, 0) scale(1); }
+  52% { opacity: 0.16; transform: translate3d(-7%, -8%, 0) scale(1.08); }
 }
 
 @keyframes executive-orb-neutral-drift {
-  0%, 100% { opacity: 0.1; transform: translate3d(0, 0, 0); }
-  50% { opacity: 0.14; transform: translate3d(5%, -7%, 0); }
+  0%, 100% { opacity: 0.12; transform: translate3d(0, 0, 0); }
+  50% { opacity: 0.18; transform: translate3d(5%, -7%, 0); }
 }
 
 @keyframes executive-grid-drift {
@@ -138,26 +138,6 @@
   animation: executive-flow-path 21s linear infinite;
 }
 
-.executive-hero-meta .status-attention i::after,
-.executive-hero-meta .status-steady i::after {
-  animation: executive-status-ring 4.6s ease-out infinite;
-}
-
-.executive-hero-meta .executive-ai-status:not(.is-unavailable) i::after {
-  animation: executive-status-ring 4.1s ease-out -1.2s infinite;
-}
-
-.executive-ai-button.button::before {
-  animation: executive-ai-halo 9s ease-out infinite;
-}
-
-.executive-metric.primary .executive-metric-glow {
-  animation: executive-kpi-glow 10.5s ease-in-out infinite;
-}
-
-.executive-metric.primary:nth-child(2) .executive-metric-glow {
-  animation-delay: -4.5s;
-}
 
 .kpi-mini-trend i {
   animation: executive-mini-bar-enter 620ms var(--ease-out) var(--mini-bar-delay) both;
@@ -168,9 +148,6 @@
   transition: opacity var(--motion-tooltip) var(--ease-out), transform var(--motion-tooltip) var(--ease-out), visibility var(--motion-tooltip);
 }
 
-.executive-action-center::before {
-  animation: executive-risk-ambient 9.5s ease-in-out infinite;
-}
 
 .executive-action-hover,
 .executive-action-copy > small {

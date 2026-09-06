@@ -1,7 +1,9 @@
 # Version Status
 
-## Current: V1.5
+## Current: V1.5.2
 
+- Executive Pulse Core gives the owner dashboard a visible, rule-derived operating-status heartbeat.
+- Global AI Orb and non-modal conversation window remain available across authenticated routes with page-aware context and persistent client-side conversation state.
 - Executive owner dashboard with cash outlook, prioritized actions, project health, company funds, aging and maturity drill-downs.
 - Real AI Core with OpenAI-compatible Responses/Chat adapter, structured output, streaming, stateless tool calling and multi-round conversations.
 - Role-filtered read-only business tools, server-owned evidence, prompt-injection boundaries and AI run/tool audit.

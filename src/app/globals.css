@@ -7,6 +7,8 @@
 @import "../styles/executive-ambient.css";
 @import "../styles/executive.css";
 @import "../styles/executive-motion.css";
+@import "../styles/executive-pulse.css";
+@import "../styles/global-ai.css";
 
 * { box-sizing: border-box; }
 html { background: var(--canvas); }

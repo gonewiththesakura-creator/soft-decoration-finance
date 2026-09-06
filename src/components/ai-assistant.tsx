@@ -1,1 +1,1 @@
-export { AiAssistant } from "./ai-assistant-new";
+export { AiAssistant, type AIAssistantActivity } from "./ai-assistant-new";

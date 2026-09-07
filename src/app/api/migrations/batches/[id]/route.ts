@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { confirmMigrationBatch, getMigrationBatch, importMigrationBatch, reviewBusinessFact, rollbackMigrationBatch, updateStagingRow } from "@/data/data-migration";
+import { assignMigrationProjectCompany, confirmMigrationBatch, getMigrationBatch, importMigrationBatch, reviewBusinessFact, rollbackMigrationBatch, updateStagingRow } from "@/data/data-migration";
 import { getSession } from "@/lib/auth";
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -15,6 +15,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (body.action === "confirm") { await confirmMigrationBatch(batchId, user, String(body.confirmation ?? "")); return NextResponse.json({ ok: true }); }
     if (body.action === "import") return NextResponse.json({ ok: true, result: await importMigrationBatch(batchId, user) });
     if (body.action === "rollback") return NextResponse.json(await rollbackMigrationBatch(batchId, user));
+    if (body.operation === "assign-company") return NextResponse.json(await assignMigrationProjectCompany(batchId, Number(body.companyId), user));
     if (body.operation === "review-fact") return NextResponse.json(await reviewBusinessFact(batchId, Number(body.factId), body.decision === "IGNORE" ? "IGNORE" : "ACCEPT", user));
     if (body.operation === "update-row") { await updateStagingRow(batchId, Number(body.rowId), body, user); return NextResponse.json({ ok: true }); }
     throw new Error("无效的批次操作");

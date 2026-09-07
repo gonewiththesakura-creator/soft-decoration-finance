@@ -11,7 +11,7 @@ import { getDashboardData } from "@/data/dashboard";
 import { getDashboardAnalytics } from "@/data/analytics/dashboard";
 import { getCustomerProfile, getSupplierProfile } from "@/data/partners";
 import * as XLSX from "xlsx";
-import { bindMigrationContext, confirmMigrationBatch, createMigrationWorkbook, getMigrationBatch, importMigrationBatch, resolveProjectForImport, reviewBusinessFact, rollbackMigrationBatch, stageMigrationBatch, suggestedMappings, updateStagingRow } from "@/data/data-migration";
+import { assignMigrationProjectCompany, bindMigrationContext, confirmMigrationBatch, createMigrationWorkbook, getMigrationBatch, importMigrationBatch, resolveProjectForImport, reviewBusinessFact, rollbackMigrationBatch, stageMigrationBatch, suggestedMappings, updateStagingRow } from "@/data/data-migration";
 import { createWorkspacePurchaseRequest, getProcurementWorkspace } from "@/data/procurement-workspace";
 import { getProjectDetail, getProjectSections } from "@/data/project-detail";
 import { authenticate } from "@/lib/auth";
@@ -310,6 +310,25 @@ describe.sequential("business workflow integration", () => {
     const conflict = await bindMigrationContext({ batchId: conflictUpload.batchId, scope: "PROJECT", projectId: projectAId }, owner);
     expect(conflict).toMatchObject({ contextConfirmed: false, conflict: { currentProject: projectAName, level: "CONFLICT" } });
     await expect(stageMigrationBatch({ batchId: conflictUpload.batchId, sheetId: conflictUpload.sheets[0].id, businessType: "skus", mappings: suggestedMappings("skus", conflictUpload.sheets[0].headers) }, owner)).rejects.toThrow("PROJECT_CONFLICT");
+  });
+
+  it("repairs a project without a company before formal import", async () => {
+    const marker = Date.now();
+    const projectName = `待补公司导入${marker}`;
+    const [project] = await sqlQuery<{ id: number }>(`INSERT INTO projects(company_id,customer_id,code,name,owner_id,status,created_by) VALUES(NULL,NULL,$1,$2,$3,'待补充',$3) RETURNING id`, [`NO-COMPANY-${marker}`, projectName, owner.id]);
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet([{ 房间区域: "大堂", 产品名称: "公司归属测试摆件", 规格: "300mm", 材质: "陶瓷", 数量: 1, 单位: "件", 单价: 680 }]), "饰品");
+    const bytes = XLSX.write(book, { type: "buffer", bookType: "xlsx" }) as Buffer;
+    const workbook = await createMigrationWorkbook(new File([Uint8Array.from(bytes)], `${projectName}SKU表.xlsx`), owner);
+    const context = await bindMigrationContext({ batchId: workbook.batchId, scope: "PROJECT", projectId: Number(project.id) }, owner);
+    expect(context).toMatchObject({ contextConfirmed: true, project: { companyId: null } });
+    expect(await stageMigrationBatch({ batchId: workbook.batchId, sheetId: workbook.sheets[0].id, businessType: "skus", mappings: {}, autoAllSheets: true }, owner)).toMatchObject({ ready: 1, error: 0 });
+    await confirmMigrationBatch(workbook.batchId, owner, "确认导入真实数据");
+    await expect(importMigrationBatch(workbook.batchId, owner)).rejects.toThrow("项目尚未补充所属公司");
+    await expect(assignMigrationProjectCompany(workbook.batchId, 1, owner)).resolves.toMatchObject({ ok: true, company: { id: 1 } });
+    await expect(importMigrationBatch(workbook.batchId, owner)).resolves.toMatchObject({ successRows: 1 });
+    const [binding] = await sqlQuery<{ projectCompany: number; batchCompany: number }>(`SELECT p.company_id AS "projectCompany",b.company_id AS "batchCompany" FROM projects p JOIN import_batches b ON b.project_id=p.id WHERE b.id=$1`, [workbook.batchId]);
+    expect(binding).toEqual({ projectCompany: 1, batchCompany: 1 });
   });
 
   it("scans allowed folders read-only and detects unchanged, updated and duplicate files", async () => {

@@ -584,6 +584,26 @@ export async function updateStagingRow(batchId: number, rowId: number, input: { 
   await sqlQuery(`UPDATE import_batches b SET ready_rows=x.ready,warning_rows=x.warning,error_rows=x.error,updated_at=now() FROM (SELECT count(*) FILTER (WHERE status='READY')::int AS ready,count(*) FILTER (WHERE status='WARNING')::int AS warning,count(*) FILTER (WHERE status='ERROR')::int AS error FROM import_staging_rows WHERE batch_id=$1) x WHERE b.id=$1`, [batchId]);
 }
 
+export async function assignMigrationProjectCompany(batchId: number, companyId: number, user: SessionUser) {
+  const batch = await requireBatch(batchId, user); assertCan(user, "imports", "write");
+  if (String(batch.scope_type) !== "PROJECT" || !batch.project_id) throw new Error("当前批次未绑定项目");
+  if (!["VALIDATED", "READY_TO_IMPORT"].includes(String(batch.status))) throw new Error("只能在预检完成后补充项目公司");
+  if (!Number.isInteger(companyId) || companyId <= 0) throw new Error("请选择有效的所属公司");
+  if (user.role !== "owner" && companyId !== user.companyId) throw new Error("FORBIDDEN");
+  const [company] = await sqlQuery<{ id: number; name: string }>(`SELECT id,name FROM companies WHERE id=$1 AND status='active'`, [companyId]);
+  if (!company) throw new Error("公司不存在或不可用");
+  const [project] = await sqlQuery<{ id: number; companyId: number | null }>(`SELECT id,company_id AS "companyId" FROM projects WHERE id=$1`, [batch.project_id]);
+  if (!project) throw new Error("目标项目不存在");
+  if (project.companyId !== null && Number(project.companyId) !== companyId) throw new Error("项目已归属其他公司，不能通过导入批次改绑");
+  await runTransaction([
+    { query: `UPDATE projects SET company_id=$1,updated_at=now(),updated_by=$2 WHERE id=$3 AND company_id IS NULL`, params: [companyId, user.id, project.id] },
+    { query: `UPDATE import_batches SET company_id=$1,updated_at=now() WHERE id=$2`, params: [companyId, batchId] },
+    { query: `UPDATE import_business_facts SET company_id=$1 WHERE batch_id=$2`, params: [companyId, batchId] },
+    { query: `INSERT INTO audit_logs(company_id,project_id,user_id,object_type,object_id,action,after,ip) VALUES($1,$2,$3,'import_batch',$4,'ASSIGN_PROJECT_COMPANY',jsonb_build_object('company_id',$1::int,'company_name',$5::text),'127.0.0.1')`, params: [companyId, project.id, user.id, batchId, company.name] },
+  ]);
+  return { ok: true, company: { id: Number(company.id), name: company.name } };
+}
+
 export async function confirmMigrationBatch(batchId: number, user: SessionUser, confirmation?: string) {
   const batch = await requireBatch(batchId, user); assertCan(user, "imports", "write");
   if (isRealDataMode() && confirmation !== "确认导入真实数据") throw new Error("请输入“确认导入真实数据”后再继续");

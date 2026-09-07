@@ -517,6 +517,10 @@ textarea.input { height: 78px; resize: vertical; padding-top: 9px; }
 .row-actions { display: flex; align-items: center; gap: 6px; }
 .migration-footer { min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-top: 1px solid var(--line); background: var(--surface-subtle); }
 .migration-footer > div { display: flex; gap: 7px; }
+.migration-action-feedback { flex: 1; min-width: 180px; color: var(--muted); font-size: 11px; text-align: right; }
+.compact-modal { max-width: 560px; }
+.company-assignment-body { display: grid; gap: 16px; padding: 20px; }
+.company-assignment-body .migration-notice.warning { margin: 0; }
 
 @media (max-width: 1280px) {
   .metric-grid { grid-template-columns: repeat(3,1fr); }
@@ -620,6 +624,7 @@ textarea.input { height: 78px; resize: vertical; padding-top: 9px; }
   .migration-counts { justify-content: flex-start; }
   .migration-footer { align-items: stretch; flex-direction: column; }
   .migration-footer > div,.migration-footer .button { flex: 1; }
+  .migration-action-feedback { min-width: 0; text-align: left; }
   .copilot-trigger { width: 36px; padding: 0; font-size: 0; }
   .copilot-trigger svg { width: 16px; }
   .ai-layout-v14 { min-height: calc(100vh - 170px); grid-template-columns: 1fr; }

@@ -92,8 +92,8 @@
 }
 
 .executive-hero {
-  background: #173a32;
-  box-shadow: 0 24px 58px rgba(20, 43, 35, 0.2);
+  background: #0b2924;
+  box-shadow: var(--shadow-intelligence);
 }
 
 .executive-hero-visual {
@@ -109,10 +109,10 @@
   inset: -34%;
   opacity: 0.98;
   background-image:
-    radial-gradient(circle at 8% 20%, rgba(112, 170, 148, 0.34), transparent 30%),
-    radial-gradient(circle at 88% 4%, rgba(200, 170, 106, 0.28), transparent 28%),
-    radial-gradient(circle at 61% 92%, rgba(111, 159, 153, 0.22), transparent 35%),
-    linear-gradient(118deg, #173a32 0%, #243f37 58%, #454b41 100%);
+    radial-gradient(circle at 8% 20%, rgba(103, 173, 154, 0.31), transparent 30%),
+    radial-gradient(circle at 88% 4%, rgba(198, 166, 108, 0.24), transparent 28%),
+    radial-gradient(circle at 61% 92%, rgba(53, 126, 112, 0.24), transparent 35%),
+    linear-gradient(118deg, #0b2924 0%, #103b33 55%, #273f38 100%);
   background-size: 150% 160%, 175% 165%, 190% 180%, 100% 100%;
   background-repeat: no-repeat;
   will-change: background-position;
@@ -131,7 +131,7 @@
   width: 430px;
   height: 330px;
   opacity: 0.18;
-  background: #76a697;
+  background: #67ad9a;
 }
 
 .executive-hero-glow-gold {
@@ -140,7 +140,7 @@
   width: 460px;
   height: 390px;
   opacity: 0.16;
-  background: #c8aa6a;
+  background: #c6a66c;
 }
 
 .executive-hero-grid {

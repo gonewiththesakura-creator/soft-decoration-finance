@@ -1,88 +1,147 @@
-# 织衡经营财务 V1.3 Design System
+# ZHIHENG DESIGN SYSTEM
 
-## 视觉定位
+Version: 2.0
 
-织衡是面向老板、财务、项目经理和采购团队的经营操作系统。界面应安静、精确、可信，让用户先看到结论、趋势、风险和下一步行动，再按需进入明细。它不是营销页、科技大屏或网页化 Excel。
+Status: Single Source of Truth
 
-视觉关键词：克制、现代、专业、轻奢、信息密度适中、金融数字清晰、状态反馈明确。
+Positioning: Premium AI Business Operating System / 高级 AI 经营操作系统
 
-## 色彩
+## 1. Governance
 
-| Token | 色值 | 用途 |
+本文件是织衡产品视觉设计的唯一规则源。`docs/design-references/` 只保存参考数据，不能直接驱动组件实现；具体来源与取舍见 `docs/DESIGN-SOURCES.md`。动效规则由根目录 `MOTION.md` 管理。
+
+任何 Agent 不得为了让当前代码“符合验收”而修改、删除或降低 `DESIGN.md` / `MOTION.md` 的标准。确需修改时，必须先提交 **Design System Change Proposal**，说明问题、影响范围、拟议规则和迁移成本，并等待人工确认。
+
+## 2. Product Character
+
+织衡应同时传达 Enterprise AI、Financial Intelligence、Quiet Technology、Warm Precision 与 Living Data。第一眼是精确而安静的经营系统，第二眼能感知 AI 与经营数据正在运行。
+
+织衡不是传统 ERP、网页 Excel、Admin Template、科技大屏、Cyberpunk、消费金融 App 或 Marketing Landing Page。视觉不复制 Cohere、Mastercard、Linear、Revolut 或 Apple 的品牌特征。
+
+## 3. Color System
+
+### Foundation
+
+| Token | Value | Role |
 | --- | --- | --- |
-| Canvas | `#F5F3EE` | 暖白页面背景 |
-| Surface | `#FFFFFF` | 图表、工具和明细表面 |
-| Forest | `#173C33` | 品牌、主要操作、预计余额 |
-| Graphite | `#26312D` | 主文本 |
-| Sage | `#7C988C` | 次级结构、辅助图表 |
-| Emerald | `#28725F` | 应收、正向、完成 |
-| Amber | `#B27A2E` | 应付、等待、提醒 |
-| Brick | `#A4493D` | 风险、逾期、资金缺口 |
-| Stone | `#9A968D` | 预算、基线、弱化数据 |
+| Mineral Canvas | `#F2F3EF` | 默认页面底层 |
+| Warm Canvas | `#F6F5F1` | 暖色开放区域 |
+| Elevated Surface | `#FBFCFA` | 内容、表单、明细表面 |
 
-同一业务语义在所有页面保持一致：应收为 Emerald，应付为 Amber，余额为 Forest，风险为 Brick，预算为 Stone，实际为 Emerald。图表不使用彩虹色、荧光色或装饰性渐变。
+### Ink
 
-## Typography
+| Token | Value | Role |
+| --- | --- | --- |
+| Primary Ink | `#151D1A` | 标题、关键数字 |
+| Secondary Ink | `#35413D` | 正文、表格 |
+| Muted | `#727C77` | 元数据、说明 |
 
-- Display：宋体气质仅用于少量经营结论，24-28px，不做营销式大标题。
-- Heading：中文无衬线，20-24px，页面级标题。
-- Section：14-16px，区块结论和图表标题。
-- Body：12-14px，`PingFang SC / Microsoft YaHei` 优先。
-- Caption：10-12px，辅助说明，仍满足可读对比度。
-- Financial Metric：18-30px，等宽数字特性，紧凑但不挤压容器。
+### Brand And Intelligence
 
-禁止负字距；金额、比例、日期统一启用 `tabular-nums`。
+| Token | Value | Role |
+| --- | --- | --- |
+| Forest Core | `#103B33` | 品牌、主要控制、余额 |
+| Deep Intelligence | `#0B2924` | AI、深色智能表面 |
+| Technical Teal | `#357E70` | 技术、交互、预测 |
+| Living Teal | `#67AD9A` | AI Online、Pulse、活跃数据 |
+| Champagne | `#C6A66C` | Executive、重要高光 |
+| Soft Gold | `#DBC594` | 克制的暖色强调 |
 
-## Chart Vocabulary
+### Semantic
 
-- Area：当前资金与未来现金余额，强调趋势和缺口日期。
-- Grouped Bar：同一时间段的应收与应付比较。
-- Horizontal Bar：项目健康、供应商或品类排名。
-- Donut：公司资金或项目成本的有限类别结构；类别过多合并为“其他”。
-- Radial Progress：单个项目的回款、采购、到货、付款和发票进度。
-- Pipeline：有固定顺序的采购业务状态，不伪装成连续数值图。
+| Token | Value | Role |
+| --- | --- | --- |
+| Receivable | `#3E806B` | 应收、回款、正向 |
+| Payable | `#B9803B` | 应付、等待、提醒 |
+| Risk | `#B4574A` | 风险、逾期、缺口 |
+| Budget | `#8F918B` | 预算、基线、弱化 |
 
-每张图必须包含真实查询数据、响应式容器、可读图例、悬浮提示、空状态、稳定高度和 reduced-motion 支持。颜色之外还需文字或数值表达状态。
+### Dark And Hairline
 
-## Motion System
+| Token | Value | Role |
+| --- | --- | --- |
+| Dark 0 | `#0B1F1B` | 最深品牌背景 |
+| Dark 1 | `#102A24` | Sidebar / Intelligence |
+| Dark 2 | `#17372F` | 深色抬升层 |
+| Hairline Light | `#DCDDDA` | 浅色分隔 |
+| Hairline Dark | `rgba(255,255,255,.10)` | 深色分隔 |
 
-- 页面内容进入：240ms，ease-out。
-- 图表进入：640ms，ease-out。
-- 列表顺序进入：每项 55ms，最大延迟 330ms。
-- Hover / focus：150ms，ease-out。
-- Drawer / modal：240ms，ease-out。
+Forest 表达身份与主控制，Technical Teal 表达技术与交互，Living Teal 表达在线与活跃，Champagne 表达重要但非风险的高光，Risk 只表达真实风险。禁止 AI Purple、Neon Blue、Rainbow，以及全局使用纯黑或纯白。
 
-动画只解释层级、状态变化和数据出现。禁止 bounce、elastic、持续背景运动和大面积文字动画。`prefers-reduced-motion: reduce` 时关闭非必要动画和顺滑滚动。
+## 4. Surface System
 
-## Spacing And Shape
+| Level | Name | Treatment | Use |
+| --- | --- | --- | --- |
+| 0 | Canvas | Mineral / Warm 微弱明度变化 | 页面底层与开放空间 |
+| 1 | Base Surface | `#F6F5F1` 或透明暖色层 | 工具带、分组背景 |
+| 2 | Elevated Surface | `#FBFCFA` + Hairline | 独立业务对象、表单、分析面板 |
+| 3 | Intelligence Surface | Deep Intelligence / Dark 2 | AI、经营指挥、关键行动 |
+| 4 | Floating Surface | Elevated 或 Intelligence + 精确阴影 | AI 浮窗、Modal、Tooltip |
 
-- 基础间距：4 / 8 / 12 / 16 / 24 / 32px。
-- 页面区块间距：24-32px；区块内部：16-20px。
-- 圆角：表面 6-8px，按钮 6px，状态标签 4px；不使用胶囊式大圆角。
-- 阴影只用于浮层和悬浮反馈；常规区块依靠背景、边线和留白分层。
-- 1440px 以上保持高信息密度；375px 下改为单列，图表与文字均不可横向溢出。
+层级主要依靠明度、边线和留白，不依靠 Shadow everywhere。Card 只用于独立对象、重复项目、Modal 或真正需要边界的工具；禁止 Card 套 Card。普通业务 Surface 圆角 8-10px，Executive / Floating 12-16px，小标签 4-6px。
 
-## Component Rules
+## 5. Typography And Numbers
 
-- 页面顺序优先：结论 → 趋势 → 结构 → 风险 → 行动 → 明细。
-- 图表是经营判断工具，不作为装饰；明细表只承担 drill-down。
-- Action Center 必须提供直接可执行的链接，不只显示数字。
-- Card 只用于独立、重复或确实需要边界的对象；禁止 Card 套 Card。
-- 图标使用 Lucide；纯图标按钮必须有 `aria-label` 和提示。
-- 空状态说明“为什么为空”或“下一步去哪”，加载态保持布局尺寸稳定。
-- Tabs 保留横向可滚动和清晰的 active / focus 状态。
+中文与 UI 使用 `PingFang SC`, `Microsoft YaHei`, `Noto Sans CJK SC`, `system-ui`, `sans-serif`。不加载参考品牌的专有字体。宋体气质只允许用于极少量 Executive 经营结论；Mono 只用于技术 ID、代码和 AI Tool 元数据。
 
-## Anti-Patterns
+| Role | Size | Weight | Notes |
+| --- | --- | --- | --- |
+| Page Heading | 22-26px | 680-720 | 紧凑、非营销式 |
+| Section Heading | 14-17px | 650-700 | 分析模块标题 |
+| Body | 12-14px | 400-500 | 高密度但可读 |
+| Caption | 10-11px | 450-600 | 元数据与范围 |
+| Executive Metric | 28-34px | 650-720 | 只用于核心经营数字 |
+| Major Finance | 20-26px | 620-700 | 资金、应收、应付 |
+| Table Number | 12-14px | 550-650 | 与表格行高匹配 |
 
-- 不做 KPI 卡片海、超宽首屏表格或所有页面同构。
-- 不做 Landing Page、玻璃拟态、霓虹、科技大屏或紫蓝 AI 渐变。
-- 不使用装饰性大标题、无业务意义插画、粒子或 3D 背景。
-- 不用颜色作为唯一状态信号，不隐藏关键单位和时间范围。
-- 不硬编码图表数据，不绕过 RBAC、公司范围或项目范围。
-- 不为动画引入业务状态，不让 hover 或加载内容造成布局跳动。
+所有金额、比例和日期使用正常 Sans 与 `font-variant-numeric: tabular-nums`。全系统 letter-spacing 为 0，不用负字距。
 
-## 标杆页面差异
+## 6. Navigation
 
-- Dashboard：集团视角，以现金流、行动中心、项目健康和公司资金分布为主。
-- Project Detail：单项目视角，以健康评分、经营进度、累计收支、成本和采购阶段为主。
-- Finance Workspace：财务执行视角，以资金预测、账龄、到期结构和行动队列为主。
+Sidebar 是 Dark Mineral Forest，而不是传统 ERP 的整块深绿。背景使用 `#0B211C` 到 `#102D27` 的低对比纵向变化，并叠加极轻 Teal luminance。默认导航低对比；Hover 使用 Technical Teal Tint；Active 使用轻表面、左侧信号、图标亮度和 Hairline Glow，禁止大面积亮色块。
+
+品牌区保持“衡”字标识，但使用 Dark Glass、Technical Teal 与 Champagne Hairline 增加精密度。Topbar 使用 Warm Mineral Glass：半透明暖矿物表面、18px blur 和 1px premium hairline，不使用强阴影。
+
+## 7. Controls
+
+- Primary Button：Forest Core，白色标签，承担明确提交或创建。
+- Secondary Button：Mineral / Elevated Surface，Primary Ink，Hairline 边框。
+- AI Button：Deep Intelligence 或 Technical Teal，只用于 AI 行为。
+- Danger Button：Risk Tint + Risk 文本，实心 Risk 只用于高确定性破坏操作。
+- Input：Elevated Surface，Technical Teal Focus Hairline 与柔和 Ring。
+- Badge：低饱和 Tint Background + Strong Text；禁止大量彩色实心 Badge。
+- Icon Button：稳定方形尺寸，Lucide 图标，可访问名称和 Tooltip。
+
+按钮不全部同样沉重。熟悉的单一工具动作优先图标按钮；明确业务命令使用图标加文字。输入、按钮与动态文本不得改变布局尺寸。
+
+## 8. Tables And Charts
+
+Table 是高密度执行工具，不做 Card Table。Header 使用 Mineral Surface，行分隔使用 Hairline，Hover 使用 Technical Tint，Selected 使用 Teal Signal。表格数字为 12-14px Sans Tabular。
+
+图表语义固定：Balance = Forest Core，Receivable = Receivable Green，Payable = Amber，Risk = Brick，Forecast = Technical Teal，Secondary = Sage，Premium Highlight = Champagne。禁止 Rainbow。
+
+Cashflow 使用 Financial Intelligence Surface；Project Health 使用 Light Analytical Surface；Donut 可使用 Open Surface。图表必须有真实查询数据、稳定尺寸、Tooltip、空状态、文字图例、Drill-down 与 Reduced Motion。
+
+## 9. Dashboard And AI
+
+Dashboard Hero 是 Dark Intelligence Field，不是普通深绿 Card。它可以包含低浓度 Deep Forest、Technical Teal、Champagne Light、Mesh、Flow 和 Executive Pulse，但不增加新动画。KPI 分为 Primary、Secondary 与 Risk 层级，避免六张同构白卡。
+
+Executive Pulse 是 Financial System Heartbeat：保留真实状态逻辑，使用 Forest Core、Living Teal 与 Champagne，禁止游戏技能图标感。
+
+Global AI Orb 使用 Deep Intelligence 与 Living Teal，可有极少 Champagne 高光。Floating AI Window 使用 Dark Intelligence Header、Mineral Body 与 Technical Hairline，保持非模态、精确、克制，不模仿通用聊天产品。
+
+## 10. Responsive And Accessibility
+
+设计基线：Desktop 1440x900 / 1920x1080，Mobile 390x844。桌面保持高信息密度；移动端调整为单列或水平滚动工具，不裁切长文本、不产生页面横向溢出。交互不只依赖颜色或 Hover，Focus Visible 必须清晰，所有状态包含文字或数值表达。
+
+## 11. Anti-Patterns
+
+- 不做 KPI Card 海、Card 套 Card、Shadow everywhere 或所有页面同构。
+- 不做 Landing Page Hero、科技大屏、Cyberpunk、紫蓝 AI 渐变或消费金融彩虹色。
+- 不把所有金额设成 Monospace，不用负字距，不用装饰性超大标题。
+- 不用颜色替代状态文字，不硬编码图表数据，不绕过 RBAC 和公司/项目范围。
+- 不为美观创造业务状态，不让 Hover、Loading 或动态内容造成布局跳动。
+
+## 12. Delivery Gate
+
+任何全局视觉改动必须检查 Dashboard、Project、Finance、Procurement、AI 与 Mobile。工程侧可记录 `Implementation QA complete`；最终视觉验收只由用户决定，禁止自行声明 `Visual Acceptance Passed`。

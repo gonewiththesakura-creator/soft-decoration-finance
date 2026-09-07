@@ -1,7 +1,11 @@
 # Version Status
 
-## Current: V1.5.2
+## Current: V1.6
 
+- ZHIHENG DESIGN SYSTEM v2.0 and MOTION v1.0 are now the governed visual and motion sources of truth.
+- Project, finance, procurement and executive surfaces use the mineral-white, deep-forest, muted-teal and champagne design language.
+- Dashboard, Executive Pulse, Global AI Orb/window and the standalone AI workspace are aligned to the V1.6 hierarchy without changing business behavior.
+- Design references are pinned, vendored and attributed for offline review; future standard changes require a human-approved Design System Change Proposal.
 - Executive Pulse Core gives the owner dashboard a visible, rule-derived operating-status heartbeat.
 - Global AI Orb and non-modal conversation window remain available across authenticated routes with page-aware context and persistent client-side conversation state.
 - Executive owner dashboard with cash outlook, prioritized actions, project health, company funds, aging and maturity drill-downs.

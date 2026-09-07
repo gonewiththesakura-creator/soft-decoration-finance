@@ -1,8 +1,10 @@
 :root {
   --motion-hover: 150ms;
+  --motion-tooltip: 150ms;
   --motion-page: 240ms;
   --motion-drawer: 240ms;
   --motion-chart: 640ms;
+  --motion-reveal: 420ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
 @keyframes os-enter {
@@ -24,7 +26,7 @@
 .os-stagger > *:nth-child(6) { animation-delay: 275ms; }
 
 :focus-visible {
-  outline: 2px solid var(--brand-2);
+  outline: 2px solid var(--technical-teal);
   outline-offset: 2px;
 }
 

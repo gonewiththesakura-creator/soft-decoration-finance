@@ -92,13 +92,17 @@
   isolation: isolate;
   overflow: visible;
   cursor: pointer;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.9), 0 8px 22px rgba(35, 56, 48, 0.035);
+  background: rgba(251, 252, 250, 0.9);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.72), 0 8px 22px rgba(35, 56, 48, 0.035);
 }
 
 .executive-metric.primary {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(243, 247, 244, 0.96));
+  border-color: rgba(53, 126, 112, 0.26);
+  background: linear-gradient(135deg, rgba(248, 251, 248, 0.98), rgba(231, 241, 236, 0.96));
 }
+
+.executive-metric.danger { background: linear-gradient(180deg, var(--surface-risk), rgba(251, 252, 250, 0.94) 46%); }
+.executive-metric.warning { background: linear-gradient(180deg, var(--surface-warning), rgba(251, 252, 250, 0.94) 46%); }
 
 .executive-metric-glow {
   position: absolute;
@@ -358,9 +362,9 @@
 }
 
 .cashflow-command {
-  border-color: #d2d9d4;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 249, 247, 0.98));
-  box-shadow: 0 18px 44px rgba(29, 50, 42, 0.07);
+  border-color: rgba(53, 126, 112, 0.25);
+  background: linear-gradient(180deg, rgba(248, 251, 248, 0.98), rgba(237, 244, 240, 0.96));
+  box-shadow: 0 18px 44px rgba(29, 50, 42, 0.065), inset 0 1px rgba(255,255,255,.72);
 }
 
 .executive-ai-brief .ai-insight-panel {
@@ -372,23 +376,24 @@
 }
 
 .project-health-surface {
-  background: rgba(249, 251, 248, 0.96);
+  background: rgba(247, 249, 246, 0.94);
 }
 
 .fund-structure-surface {
-  background: linear-gradient(155deg, rgba(255, 255, 255, 0.94), rgba(244, 245, 241, 0.94));
+  border-color: rgba(198,166,108,.24);
+  background: linear-gradient(155deg, rgba(251, 252, 250, 0.94), rgba(244, 241, 234, 0.92));
 }
 
 .structure-surface {
-  background: rgba(252, 252, 249, 0.92);
+  background: rgba(248, 249, 246, 0.88);
 }
 
 .dashboard-flow-compare {
-  background: linear-gradient(180deg, rgba(251, 252, 249, 0.97), rgba(247, 248, 244, 0.96));
+  background: linear-gradient(180deg, rgba(251, 252, 250, 0.96), rgba(242, 245, 241, 0.94));
 }
 
 .recent-business {
-  background: rgba(255, 255, 255, 0.94);
+  background: rgba(251, 252, 250, 0.9);
 }
 
 .executive-section .panel-link,

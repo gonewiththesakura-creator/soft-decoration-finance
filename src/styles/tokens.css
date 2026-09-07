@@ -1,40 +1,71 @@
 :root {
-  --canvas: #f5f3ee;
-  --canvas-deep: #eeece5;
-  --surface: #ffffff;
-  --surface-subtle: #faf9f6;
-  --ink: #26312d;
-  --ink-strong: #17241f;
-  --muted: #68736e;
-  --muted-strong: #4f5d57;
-  --line: #e2e2dc;
-  --line-strong: #cfd3cc;
-  --brand: #173c33;
-  --brand-2: #285b4e;
-  --sage: #7c988c;
-  --green: #28725f;
-  --green-bg: #e9f4ef;
-  --orange: #a66f28;
-  --orange-bg: #fbf0de;
-  --red: #a4493d;
-  --red-bg: #f8eae7;
-  --stone: #9a968d;
-  --chart-receivable: #3f816c;
-  --chart-payable: #b7833d;
-  --chart-balance: #173c33;
-  --chart-risk: #a4493d;
-  --chart-budget: #9a968d;
-  --chart-sage: #7c988c;
-  --chart-clay: #bd7662;
-  --chart-gold: #c3a15b;
-  --shadow-float: 0 18px 45px rgba(31, 47, 40, 0.13);
+  color-scheme: light;
+
+  --canvas: #f2f3ef;
+  --canvas-warm: #f6f5f1;
+  --canvas-deep: #e9ece7;
+  --surface-base: #f6f5f1;
+  --surface: #fbfcfa;
+  --surface-subtle: #f4f6f2;
+  --surface-technical: #edf4f1;
+  --surface-risk: #f7ece9;
+  --surface-warning: #f6efe3;
+  --intelligence: #0b2924;
+  --intelligence-raised: #17372f;
+
+  --ink: #35413d;
+  --ink-strong: #151d1a;
+  --muted: #727c77;
+  --muted-strong: #53605b;
+  --on-dark: #f3f7f4;
+  --on-dark-muted: #afc2bb;
+
+  --line: #dcddda;
+  --line-strong: #c8ceca;
+  --line-dark: rgba(255, 255, 255, 0.1);
+  --line-technical: rgba(53, 126, 112, 0.34);
+
+  --brand: #103b33;
+  --brand-2: #357e70;
+  --technical-teal: #357e70;
+  --living-teal: #67ad9a;
+  --sage: #7f9c91;
+  --champagne: #c6a66c;
+  --soft-gold: #dbc594;
+
+  --green: #3e806b;
+  --green-bg: #e8f1ed;
+  --orange: #a56f30;
+  --orange-bg: #f6eee1;
+  --red: #b4574a;
+  --red-bg: #f7e9e6;
+  --stone: #8f918b;
+
+  --chart-receivable: #3e806b;
+  --chart-payable: #b9803b;
+  --chart-balance: #103b33;
+  --chart-risk: #b4574a;
+  --chart-budget: #8f918b;
+  --chart-forecast: #357e70;
+  --chart-sage: #7f9c91;
+  --chart-clay: #aa6d5d;
+  --chart-gold: #c6a66c;
+
+  --shadow-float: 0 20px 54px rgba(20, 39, 33, 0.14), 0 2px 8px rgba(20, 39, 33, 0.06);
+  --shadow-intelligence: 0 24px 64px rgba(7, 31, 26, 0.18);
+  --focus-ring: 0 0 0 3px rgba(53, 126, 112, 0.13);
+
   --radius-sm: 4px;
-  --radius-control: 6px;
-  --radius-surface: 8px;
+  --radius-control: 7px;
+  --radius-surface: 10px;
+  --radius-executive: 14px;
+  --radius-floating: 14px;
+
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
+  --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
 }

@@ -4,6 +4,7 @@ import { basename, extname, resolve } from "node:path";
 import * as XLSX from "xlsx";
 import { runTransaction, sqlQuery, type TransactionStatement } from "@/db/client";
 import type { SessionUser } from "@/lib/auth";
+import { IMPORT_MAX_FILE_BYTES, IMPORT_MAX_FILE_MB } from "@/lib/import-limits";
 import { assertCan, type ResourceKey } from "@/lib/permissions";
 import { isRealDataMode } from "@/lib/data-mode";
 import { importRowsAtomic, preflightImport, type MigrationLineageInput } from "./excel-import";
@@ -105,7 +106,7 @@ export async function createMigrationWorkbook(file: File, user: SessionUser, opt
   const filename = sanitizeImportFilename(file.name);
   if (!/\.(xlsx|xls|csv)$/i.test(filename)) throw new Error("仅支持 .xlsx / .xls / .csv 文件");
   if (!file.size) throw new Error("迁移文件不能为空");
-  if (file.size > 30 * 1024 * 1024) throw new Error("历史迁移文件不能超过 30MB");
+  if (file.size > IMPORT_MAX_FILE_BYTES) throw new Error(`历史迁移文件不能超过 ${IMPORT_MAX_FILE_MB}MB`);
   const bytes = Buffer.from(await file.arrayBuffer()); const fileHash = createHash("sha256").update(bytes).digest("hex");
   const sheets = parseWorkbook(bytes, filename).map((sheet) => ({ ...sheet, signature: sheetSignature(sheet.headers) }));
   const facts = buildBusinessFacts(sheets);

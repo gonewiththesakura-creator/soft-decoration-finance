@@ -5,6 +5,7 @@ import { POST as ingestFiles } from "@/app/api/real-data/ingest/files/route";
 import { GET as ingestStatus } from "@/app/api/real-data/ingest/status/route";
 import { GET as ingestBatch } from "@/app/api/real-data/ingest/batches/[id]/route";
 import { RealDataIngestError, assertExternalRequestRate, resetExternalIngestRateLimitsForTests } from "@/lib/real-data-ingest";
+import { IMPORT_MAX_FILE_BYTES, IMPORT_MAX_FILE_MB } from "@/lib/import-limits";
 
 const token = "test-real-data-ingest-token-2026-09-07";
 const base = "http://127.0.0.1:3001/api/real-data/ingest";
@@ -112,13 +113,15 @@ describe.sequential("V1.7.1 external real-data ingest", () => {
     expect(counts).toEqual({ requests: 1, batches: 1 });
   });
 
-  it("rejects invalid workbooks and files larger than 30MB", async () => {
+  it("uses a 60MB file limit and rejects larger files", async () => {
+    expect(IMPORT_MAX_FILE_MB).toBe(60);
+    expect(IMPORT_MAX_FILE_BYTES).toBe(60 * 1024 * 1024);
     const invalid = new File(["not an xlsx archive"], "invalid.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
     const invalidResponse = await ingestFiles(uploadRequest([invalid], "invalid-file-001"));
     expect(invalidResponse.status).toBe(400);
     expect((await payload(invalidResponse)).error).toBe("INVALID_FILE");
 
-    const oversized = new File([new Uint8Array(30 * 1024 * 1024 + 1)], "oversized.csv", { type: "text/csv" });
+    const oversized = new File([new Uint8Array(IMPORT_MAX_FILE_BYTES + 1)], "oversized.csv", { type: "text/csv" });
     const oversizedResponse = await ingestFiles(uploadRequest([oversized], "oversized-file-001"));
     expect(oversizedResponse.status).toBe(413);
     expect((await payload(oversizedResponse)).error).toBe("FILE_TOO_LARGE");

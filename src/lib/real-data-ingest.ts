@@ -1,8 +1,9 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { getDataMode } from "./data-mode";
+import { IMPORT_MAX_FILE_BYTES, IMPORT_MAX_FILE_MB } from "./import-limits";
 
 export const REAL_DATA_MAX_FILES = 20;
-export const REAL_DATA_MAX_FILE_BYTES = 30 * 1024 * 1024;
+export const REAL_DATA_MAX_FILE_BYTES = IMPORT_MAX_FILE_BYTES;
 export const REAL_DATA_MAX_REQUEST_BYTES = 200 * 1024 * 1024;
 
 const acceptedMimeTypes = new Set([
@@ -123,7 +124,7 @@ export function collectExternalIngestFiles(form: FormData) {
   for (const file of files) {
     total += file.size;
     if (!file.size) throw new RealDataIngestError("EMPTY_FILE", 400, "文件不能为空");
-    if (file.size > REAL_DATA_MAX_FILE_BYTES) throw new RealDataIngestError("FILE_TOO_LARGE", 413, "单个文件不能超过 30MB");
+    if (file.size > REAL_DATA_MAX_FILE_BYTES) throw new RealDataIngestError("FILE_TOO_LARGE", 413, `单个文件不能超过 ${IMPORT_MAX_FILE_MB}MB`);
     if (!/\.(xlsx|xls|csv)$/i.test(file.name)) throw new RealDataIngestError("UNSUPPORTED_FILE", 415, "仅支持 .xlsx / .xls / .csv 文件");
     if (!acceptedMimeTypes.has(file.type.toLowerCase())) throw new RealDataIngestError("UNSUPPORTED_MEDIA_TYPE", 415, "文件 MIME 类型与支持格式不匹配");
   }

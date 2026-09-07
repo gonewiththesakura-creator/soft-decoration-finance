@@ -3,11 +3,12 @@ import { lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { delimiter, extname, isAbsolute, parse, relative, resolve, sep } from "node:path";
 import { sqlQuery } from "@/db/client";
 import type { SessionUser } from "@/lib/auth";
+import { IMPORT_MAX_FILE_BYTES, IMPORT_MAX_FILE_MB } from "@/lib/import-limits";
 import { assertCan } from "@/lib/permissions";
 import { isSupportedImportFile, type FingerprintStatus } from "./import-pilot";
 
 const maxFiles = 250;
-const maxFileBytes = 30 * 1024 * 1024;
+const maxFileBytes = IMPORT_MAX_FILE_BYTES;
 const maxTotalBytes = 500 * 1024 * 1024;
 const scanTimeoutMs = 15_000;
 
@@ -96,7 +97,7 @@ export async function scanImportFolder(input: { folderPath: string; recursive?: 
         files.push({ path: pathname, filename, extension, size: info.size, modifiedAt: info.mtime.toISOString(), hash: null, status: "UNSUPPORTED", previousBatchNumber: null, error: null });
         continue;
       }
-      if (info.size > maxFileBytes) throw new Error("文件超过 30MB");
+      if (info.size > maxFileBytes) throw new Error(`文件超过 ${IMPORT_MAX_FILE_MB}MB`);
       const bytes = await readFile(pathname);
       const hash = createHash("sha256").update(bytes).digest("hex");
       const previousPath = byPath.get(pathname.toLowerCase());

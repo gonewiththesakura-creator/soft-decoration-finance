@@ -22,6 +22,10 @@ const aliases: Record<string, string[]> = {
   payableId: ["应付", "应付编号", "付款节点编号"],
   code: ["编码", "编号"],
   name: ["名称"],
+  model: ["型号", "款号", "产品型号"],
+  specification: ["规格", "规格mm", "产品规格", "产品规格mm", "尺寸"],
+  material: ["材质", "材料", "产品材质"],
+  color: ["颜色", "色号", "产品颜色"],
   legalRepresentative: ["法人", "法人代表", "法定代表人"],
   category: ["分类", "产品分类", "主营品类"],
   type: ["类型", "类别"],
@@ -33,6 +37,7 @@ const aliases: Record<string, string[]> = {
   budgetYuan: ["采购预算", "预算金额", "预算"],
   amountYuan: ["金额", "含税金额", "应收金额", "应付金额", "付款金额", "收款金额", "申请金额", "票面金额", "已核价金额", "已收款", "已打款"],
   budgetUnitYuan: ["预算单价", "预算价"],
+  imageUrl: ["图片", "产品图片", "图片链接", "照片"],
   unitPriceYuan: ["采购价", "采购单价", "含税单价", "核价", "最终采购价", "最终采购单价", "核价后金额"],
   freightYuan: ["运费", "物流费"],
   installYuan: ["安装费", "安装金额"],
@@ -85,6 +90,7 @@ export const migrationDefinitions: MigrationDefinition[] = importDefinitions.map
       ...(definition.resource === "projects" && field.key === "name" ? ["项目", "工程名称"] : []),
       ...(definition.resource === "projects" && field.key === "code" ? ["项目编码", "项目编号", "工程编码", "工程编号"] : []),
       ...(definition.resource === "skus" && field.key === "code" ? ["SKU", "SKU编码", "产品编码", "物料编码", "货号"] : []),
+      ...(definition.resource === "skus" && field.key === "budgetUnitYuan" ? ["单价", "价格", "采购单价"] : []),
     ])),
   })),
 }));
@@ -96,9 +102,11 @@ export function sheetSignature(headers: string[]) { return headers.map(normalize
 export function suggestFieldMappings(resource: string, headers: string[]) {
   const definition = migrationDefinition(resource);
   if (!definition) return {} as Record<string, string>;
+  const usedTargets = new Set<string>();
   return Object.fromEntries(headers.map((header) => {
     const normalized = normalizeHeader(header);
-    const exact = definition.fields.find((field) => field.aliases.some((alias) => normalizeHeader(alias) === normalized));
+    const exact = definition.fields.find((field) => !usedTargets.has(field.key) && field.aliases.some((alias) => normalizeHeader(alias) === normalized));
+    if (exact) usedTargets.add(exact.key);
     return [header, exact?.key ?? ""];
   }));
 }

@@ -438,6 +438,8 @@ textarea.input { height: 78px; resize: vertical; padding-top: 9px; }
 .scope-selector { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; padding: 16px 18px; border-bottom: 1px solid var(--line); }
 .scope-selector button { min-height: 72px; display: flex; align-items: center; gap: 11px; padding: 13px; text-align: left; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); cursor: pointer; }
 .scope-selector button:hover,.scope-selector button.active { border-color: #78a596; background: #f2f8f5; }
+.scope-selector button:disabled { cursor: default; opacity: .64; }
+.scope-selector button.active:disabled { opacity: 1; }
 .scope-selector button > svg { width: 18px; color: var(--brand); flex: none; }
 .scope-selector button span { display: grid; gap: 4px; min-width: 0; }
 .scope-selector button strong { font-size: 12px; }

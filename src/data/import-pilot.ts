@@ -23,6 +23,8 @@ export type ParsedSheet = {
   classificationWarnings: string[];
   isEmpty: boolean;
   titleValues?: string[];
+  imageCount?: number;
+  images?: Array<{ sourceRow: number; sourceColumn: number; filename: string; mimeType: string; fileSize: number; url: string }>;
 };
 
 const supportedExtensions = new Set([".xlsx", ".xls", ".csv"]);
@@ -66,15 +68,31 @@ function uniqueHeaders(values: unknown[]) {
 }
 
 const knownHeaderPattern = /(项目|合同|客户|供应商|产品|品名|名称|编号|编码|规格|数量|单位|单价|金额|成本|应收|应付|付款|收款|发票|税率)/u;
+const strongHeaderPattern = /^(?:序号|项目|项目名称|合同|合同金额|客户|客户名称|供应商|供应商名称|厂家|产品|产品名称|品名|名称|编号|编码|型号|图片|规格.*|材质|数量|单位|单价|价格|金额|成本|预算价|房间|区域|空间|备注.*|链接)$/u;
 function detectHeaderRow(matrix: unknown[][]) {
-  let best = { index: 0, score: -1 };
+  let best = { index: 0, score: -1, known: 0, strong: 0 };
   matrix.slice(0, 30).forEach((row, index) => {
     const cells = row.map((value) => String(value ?? "").trim()).filter(Boolean);
     const known = cells.filter((value) => knownHeaderPattern.test(value)).length;
+    const strong = cells.filter((value) => strongHeaderPattern.test(value)).length;
     const score = cells.length + known * 4 - (cells.length === 1 ? 3 : 0);
-    if (score > best.score) best = { index, score };
+    if (score > best.score) best = { index, score, known, strong };
   });
-  return best.index;
+  return best;
+}
+
+const headerlessSkuColumns = ["序号", "房间区域", "图片", "产品名称", "规格", "数量", "单位", "材质", "备注", "尺寸", "补充材质", "预算单价", "金额", "链接"];
+
+function meaningfulRange(sheet: XLSX.WorkSheet) {
+  let maxRow = -1;
+  let maxColumn = -1;
+  for (const [address, cell] of Object.entries(sheet)) {
+    if (address.startsWith("!") || cell?.v === undefined || cell?.v === null || String(cell.v).trim() === "") continue;
+    const decoded = XLSX.utils.decode_cell(address);
+    maxRow = Math.max(maxRow, decoded.r);
+    maxColumn = Math.max(maxColumn, decoded.c);
+  }
+  return { maxRow, maxColumn };
 }
 
 function includesAny(value: string, patterns: RegExp[]) {
@@ -116,18 +134,25 @@ export function parseWorkbook(bytes: Buffer, filename: string): ParsedSheet[] {
   const book = XLSX.read(bytes, { type: "buffer", cellDates: false, cellFormula: false, cellHTML: false, bookVBA: false });
   if (!book.SheetNames.length) throw new Error("工作簿中没有 Sheet");
   return book.SheetNames.map((name, index) => {
-    const matrix = XLSX.utils.sheet_to_json<unknown[]>(book.Sheets[name], { header: 1, defval: "", raw: true, blankrows: false });
+    const sheet = book.Sheets[name];
+    const { maxRow, maxColumn } = meaningfulRange(sheet);
+    if (maxRow < 0 || maxColumn < 0) return { index, name, headerRow: 0, rows: [], headers: [], rowCount: 0, columnCount: 0, previewRows: [], classification: "EMPTY", classificationConfidence: 10000, classificationWarnings: ["Sheet 没有可导入数据"], isEmpty: true, titleValues: [] };
+    const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "", raw: true, blankrows: true, range: { s: { r: 0, c: 0 }, e: { r: maxRow, c: maxColumn } } });
     const nonEmpty = matrix.filter((row) => row.some((value) => String(value ?? "").trim() !== ""));
     if (!nonEmpty.length) return { index, name, headerRow: 0, rows: [], headers: [], rowCount: 0, columnCount: 0, previewRows: [], classification: "EMPTY", classificationConfidence: 10000, classificationWarnings: ["Sheet 没有可导入数据"], isEmpty: true, titleValues: [] };
-    const headerIndex = detectHeaderRow(matrix);
-    const headers = uniqueHeaders(matrix[headerIndex] ?? []);
+    const detected = detectHeaderRow(matrix);
+    const headerlessSku = detected.strong < 2 && /饰品|sku|产品明细/u.test(normalizeHeader(name)) && maxColumn + 1 >= 6;
+    const headerIndex = headerlessSku ? -1 : detected.index;
+    const headers = headerlessSku
+      ? uniqueHeaders(Array.from({ length: maxColumn + 1 }, (_, column) => headerlessSkuColumns[column] ?? `未命名列${column + 1}`))
+      : uniqueHeaders(matrix[headerIndex] ?? []);
     const rows = matrix.slice(headerIndex + 1).flatMap((values, rowIndex) => {
       if (!values.some((value) => String(value ?? "").trim() !== "")) return [];
       return [{ __sourceRow: headerIndex + rowIndex + 2, ...Object.fromEntries(headers.map((header, column) => [header, values[column] ?? ""])) }];
     });
     if (rows.length > 10_000) throw new Error(`Sheet“${name}”超过 10,000 行，请拆分后迁移`);
     const classified = classifySheet(name, headers, rows.length);
-    const titleValues = matrix.slice(0, headerIndex).flat().map((value) => String(value ?? "").trim()).filter(Boolean).slice(0, 20);
+    const titleValues = headerIndex > 0 ? matrix.slice(0, headerIndex).flat().map((value) => String(value ?? "").trim()).filter(Boolean).slice(0, 20) : [];
     return { index, name, headerRow: headerIndex + 1, rows, headers, rowCount: rows.length, columnCount: headers.length, previewRows: rows.slice(0, 50), classification: classified.classification, classificationConfidence: classified.confidence, classificationWarnings: classified.warnings, isEmpty: rows.length === 0, titleValues };
   });
 }

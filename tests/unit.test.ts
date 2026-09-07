@@ -10,6 +10,8 @@ import * as XLSX from "xlsx";
 import { buildBusinessFacts, classifySheet, parseWorkbook, sourceGroupKey, type ParsedSheet } from "@/data/import-pilot";
 import { analyzeWorkbook, confidenceLevel, detectProjectConflict, extractProjectCandidate, recognizeSheetFacts, suggestIntelligentMappings } from "@/data/import-intelligence";
 import { duplicateRules } from "@/data/data-migration-rules";
+import { extractWorkbookImages } from "@/data/excel-images";
+import { strToU8, zipSync } from "fflate";
 
 const finance: SessionUser = { id: 2, companyId: 1, name: "财务", email: "finance@test", role: "finance" };
 const designer: SessionUser = { id: 3, companyId: 1, name: "设计", email: "designer@test", role: "designer" };
@@ -139,6 +141,37 @@ describe("V1.7.2 project-scoped intelligent import", () => {
     expect(analysis.projectCandidate?.sources).toEqual(expect.arrayContaining(["文件名", "Sheet“钢化玻璃采购”内容"]));
   });
 
+  it("rejects contact details and document metadata as project candidates", () => {
+    expect(extractProjectCandidate("电话/传真:18676166588 Email:test@example.com")).toBeNull();
+    expect(extractProjectCandidate("网址：www.example.com 地址：工业区")).toBeNull();
+    expect(extractProjectCandidate("订单编号：GLTD0510A")).toBeNull();
+    expect(extractProjectCandidate("1.青岛鑫江中心成本表_2023-5-13更新_未完结_1_.xlsx")).toBe("青岛鑫江中心");
+  });
+
+  it("trims styled blank columns and infers headers for legacy SKU sheets", () => {
+    const book = XLSX.utils.book_new();
+    const sheet = XLSX.utils.aoa_to_sheet([[21, "大堂", "", "艺术品摆件", "常规尺寸", 2, "组", "陶瓷", "", "", "", 120, 240, "https://example.com"]]);
+    sheet["!ref"] = "A1:XFC1";
+    XLSX.utils.book_append_sheet(book, sheet, "饰品");
+    const parsed = parseWorkbook(Buffer.from(XLSX.write(book, { type: "buffer", bookType: "xlsx" })), "青岛项目饰品.xlsx")[0];
+    expect(parsed).toMatchObject({ headerRow: 0, columnCount: 14, rowCount: 1, classification: "SKU_DETAIL" });
+    expect(parsed.headers.slice(0, 7)).toEqual(["序号", "房间区域", "图片", "产品名称", "规格", "数量", "单位"]);
+  });
+
+  it("associates OOXML drawing media with its worksheet row and column", () => {
+    const xml = (value: string) => strToU8(value);
+    const bytes = Buffer.from(zipSync({
+      "xl/workbook.xml": xml(`<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="产品" r:id="rId1"/></sheets></workbook>`),
+      "xl/_rels/workbook.xml.rels": xml(`<Relationships><Relationship Id="rId1" Type="worksheet" Target="worksheets/sheet1.xml"/></Relationships>`),
+      "xl/worksheets/sheet1.xml": xml(`<worksheet/>`),
+      "xl/worksheets/_rels/sheet1.xml.rels": xml(`<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>`),
+      "xl/drawings/drawing1.xml": xml(`<xdr:wsDr><xdr:oneCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:row>2</xdr:row></xdr:from><xdr:pic><xdr:blipFill><a:blip r:embed="rId8"/></xdr:blipFill></xdr:pic></xdr:oneCellAnchor></xdr:wsDr>`),
+      "xl/drawings/_rels/drawing1.xml.rels": xml(`<Relationships><Relationship Id="rId8" Type="image" Target="../media/image1.png"/></Relationships>`),
+      "xl/media/image1.png": Uint8Array.from([137, 80, 78, 71]),
+    }));
+    expect(extractWorkbookImages(bytes, "products.xlsx")[0]).toMatchObject({ sheetName: "产品", sheetIndex: 0, sourceRow: 3, sourceColumn: 2, mimeType: "image/png" });
+  });
+
   it("recognizes multiple business facts from one sheet", () => {
     const factTypes = recognizeSheetFacts(projectSheet).map((fact) => fact.factType);
     expect(factTypes).toEqual(expect.arrayContaining(["SKU", "SUPPLIER", "PURCHASE_ORDER_LINE", "PAYABLE", "TAX", "PAYMENT_TERMS"]));
@@ -150,6 +183,11 @@ describe("V1.7.2 project-scoped intelligent import", () => {
     expect(exact).toMatchObject({ targetField: "amountYuan", confidence: 9800, level: "HIGH" });
     expect(fuzzy).toMatchObject({ targetField: "amountYuan", confidence: 7600, level: "MEDIUM" });
     expect(confidenceLevel(6900)).toBe("LOW");
+  });
+
+  it("never lets a later total-price column overwrite an already mapped unit price", () => {
+    const mappings = suggestFieldMappings("skus", ["单价", "价格", "数量"]);
+    expect(mappings).toMatchObject({ 单价: "budgetUnitYuan", 价格: "", 数量: "quantity" });
   });
 
   it("blocks a strong conflicting project candidate", () => {

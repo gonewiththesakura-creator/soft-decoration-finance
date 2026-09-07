@@ -120,9 +120,11 @@ export function confidenceLevel(confidence: number): ConfidenceLevel {
 function stripBusinessSuffix(value: string) {
   return value
     .replace(/^[\s._-]*\d+[.、_\-\s]*/u, "")
+    .replace(/[\s._-]*(?:\(\d+\)|（\d+）|\d+)[\s._-]*$/u, "")
     .replace(/[（(][^）)]*(?:19|20)\d{2}[^）)]*[）)]/gu, "")
     .replace(/(?:19|20)\d{2}[-./年]\d{1,2}(?:[-./月]\d{1,2}日?)?/gu, "")
     .replace(/(?:更新|修订|终版|最终版|未完结|已完结|副本|copy|rev|v\d+(?:\.\d+)*)/giu, "")
+    .replace(/[\s._-]+$/u, "")
     .replace(/(?:项目)?(?:总)?(?:成本|采购|付款|收款|发票|合同|报价|预算|产品|sku)(?:明细|汇总|总)?(?:表|台账)?$/iu, "")
     .replace(/[\s._-]+$/u, "")
     .trim();
@@ -132,7 +134,10 @@ export function extractProjectCandidate(value: string) {
   const leaf = value.replaceAll("\\", "/").split("/").filter(Boolean).at(-1) ?? value;
   const stem = leaf.replace(/\.(xlsx|xls|csv)$/i, "").normalize("NFKC");
   const candidate = stripBusinessSuffix(stem);
-  if (candidate.length < 2 || /^(导入|数据|财务|真实数据|import-drop)$/iu.test(candidate)) return null;
+  const invalid = /(?:https?:|www\.|@|email|e-mail|邮箱|电话|传真|手机|联系人|地址|购货方|客户名称|客户编号|订单编号|下单日期|交货时间|交货地点|运输方式|付款方式|成交日期|完成日期|税费|总成交金额)/iu;
+  const genericDocument = /^(?:项目)?(?:成本核算|客户订单确认|合同清单|报价清单|采购清单)$/u;
+  const digits = [...candidate].filter((character) => /\d/.test(character)).length;
+  if (candidate.length < 2 || candidate.length > 80 || invalid.test(candidate) || genericDocument.test(candidate) || /[+,，,]{2,}/u.test(candidate) || (digits > candidate.length / 2 && !/[\p{Script=Han}A-Za-z]{2}/u.test(candidate)) || /^(导入|数据|财务|真实数据|import-drop)$/iu.test(candidate)) return null;
   return candidate.slice(0, 120);
 }
 
@@ -151,15 +156,25 @@ export function detectProjectConflict(boundProjectName: string, candidate: Proje
 }
 
 function sourceProjectValues(sheet: ParsedSheet) {
-  const values: string[] = [];
-  for (const title of sheet.titleValues ?? []) {
-    const candidate = extractProjectCandidate(String(title));
-    if (candidate) values.push(candidate);
+  const values: { name: string; confidence: number }[] = [];
+  const titles = sheet.titleValues ?? [];
+  for (const [index, title] of titles.entries()) {
+    const text = String(title).trim();
+    const explicit = text.match(/^(?:项目全称|项目名称|项目名|工程名称|工程名)\s*[:：]\s*(.*)$/u);
+    if (explicit) {
+      const candidate = extractProjectCandidate(explicit[1] || String(titles[index + 1] ?? ""));
+      if (candidate) values.push({ name: candidate, confidence: 9900 });
+      continue;
+    }
+    if (!/(?:项目|中心|酒店|公寓|会所|别墅|售楼处|样板间)/u.test(text)) continue;
+    const candidate = extractProjectCandidate(text);
+    if (candidate) values.push({ name: candidate, confidence: 8800 });
   }
   const projectHeaders = sheet.headers.filter((header) => /^(项目名称|项目名|项目|工程名称|工程名)$/u.test(String(header).trim()));
   for (const row of sheet.rows.slice(0, 100)) for (const header of projectHeaders) {
     const value = String(row[header] ?? "").trim();
-    if (value.length >= 2 && value.length <= 120) values.push(value);
+    const candidate = extractProjectCandidate(value);
+    if (candidate) values.push({ name: candidate, confidence: 9900 });
   }
   return values;
 }
@@ -199,7 +214,14 @@ export function recognizeSheetFacts(sheet: ParsedSheet): RecognizedBusinessFact[
   if (sheet.isEmpty) return [];
   const text = normalizeHeader(`${sheet.name} ${sheet.headers.join(" ")}`);
   const facts: RecognizedBusinessFact[] = [];
+  const classificationFacts: Partial<Record<string, Set<BusinessFactType>>> = {
+    PROJECT_COST: new Set(["PROJECT_COST"]),
+    SKU_DETAIL: new Set(["SKU"]),
+    SUPPLIER_QUOTE: new Set(["SKU", "SUPPLIER", "TAX", "PAYMENT_TERMS"]),
+  };
+  const allowedFacts = classificationFacts[sheet.classification];
   for (const rule of factRules) {
+    if (allowedFacts && !allowedFacts.has(rule.factType)) continue;
     const matched = rule.signals.filter((signal) => signal.test(text)).length;
     if (matched < rule.minimum) continue;
     const confidence = Math.min(9900, rule.base + matched * 1100 + (sheet.classification !== "UNKNOWN" ? 300 : 0));
@@ -230,7 +252,7 @@ export function analyzeWorkbook(filename: string, sheets: ParsedSheet[], sourceP
     const folderCandidate = parts.length > 1 ? extractProjectCandidate(parts.at(-2) ?? "") : null;
     if (folderCandidate) candidates.push({ name: folderCandidate, confidence: 8400, source: "一级目录" });
   }
-  for (const sheet of sheets) for (const value of sourceProjectValues(sheet)) candidates.push({ name: value, confidence: 9700, source: `Sheet“${sheet.name}”内容` });
+  for (const sheet of sheets) for (const value of sourceProjectValues(sheet)) candidates.push({ name: value.name, confidence: value.confidence, source: `Sheet“${sheet.name}”内容` });
   const projectCandidates = mergeProjectCandidates(candidates);
   const facts = sheets.flatMap(recognizeSheetFacts);
   const scopeSuggestion = facts.some((fact) => projectScopedFacts.has(fact.factType)) || projectCandidates.length ? "PROJECT"

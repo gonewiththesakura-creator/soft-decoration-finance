@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
-import { basename, extname, resolve } from "node:path";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { basename, extname, resolve, sep } from "node:path";
 import * as XLSX from "xlsx";
 import { runTransaction, sqlQuery, type TransactionStatement } from "@/db/client";
 import type { SessionUser } from "@/lib/auth";
@@ -10,12 +10,13 @@ import { assertCan, type ResourceKey } from "@/lib/permissions";
 import { isRealDataMode } from "@/lib/data-mode";
 import { importRowsAtomic, preflightImport, type MigrationLineageInput } from "./excel-import";
 import {
-  applyFieldMapping, duplicateRules, migrationDefinition, normalizeHeader, sheetSignature, suggestFieldMappings,
+  applyFieldMapping, duplicateRules, migrationDefinition, normalizeHeader, parseAmount, parseQuantity, sheetSignature, suggestFieldMappings,
   validateMigrationRow, type MigrationIssue, type ReferenceEntity,
 } from "./data-migration-rules";
 import { buildBusinessFacts, parseWorkbook, sourceGroupKey, type FingerprintStatus } from "./import-pilot";
+import { extractWorkbookImages } from "./excel-images";
 import {
-  analyzeWorkbook, detectProjectConflict, projectNamesEquivalent, type ImportScope, type IntelligentWorkbookAnalysis,
+  analyzeWorkbook, detectProjectConflict, extractProjectCandidate, projectNamesEquivalent, type ImportScope, type IntelligentWorkbookAnalysis,
 } from "./import-intelligence";
 
 export type ImportSourceChannel = "UPLOAD_UI" | "FOLDER" | "EXTERNAL_API";
@@ -201,7 +202,8 @@ export async function createMigrationWorkbook(file: File, user: SessionUser, opt
   if (!file.size) throw new Error("迁移文件不能为空");
   if (file.size > IMPORT_MAX_FILE_BYTES) throw new Error(`历史迁移文件不能超过 ${IMPORT_MAX_FILE_MB}MB`);
   const bytes = Buffer.from(await file.arrayBuffer()); const fileHash = createHash("sha256").update(bytes).digest("hex");
-  const sheets = parseWorkbook(bytes, filename).map((sheet) => ({ ...sheet, signature: sheetSignature(sheet.headers) }));
+  const embeddedImages = extractWorkbookImages(bytes, filename);
+  let sheets = parseWorkbook(bytes, filename).map((sheet) => ({ ...sheet, imageCount: embeddedImages.filter((image) => image.sheetIndex === sheet.index).length, signature: sheetSignature(sheet.headers) }));
   const analysis = analyzeWorkbook(filename, sheets, options.sourcePath);
   const scope = options.scope ?? "PENDING";
   if (scope === "PROJECT" && !options.projectId) throw new Error("PROJECT_CONTEXT_REQUIRED");
@@ -229,6 +231,31 @@ export async function createMigrationWorkbook(file: File, user: SessionUser, opt
   }));
   const facts = [...baseFacts, ...recognizedFacts];
   const batchNumber = await nextBatchNumber();
+  const imageMetadata = embeddedImages.map((image) => ({
+    sheetIndex: image.sheetIndex,
+    sourceRow: image.sourceRow,
+    sourceColumn: image.sourceColumn,
+    filename: image.filename,
+    mimeType: image.mimeType,
+    fileSize: image.bytes.byteLength,
+    url: `/api/import-media/${encodeURIComponent(batchNumber)}/${encodeURIComponent(image.filename)}`,
+  }));
+  sheets = sheets.map((sheet) => {
+    const sheetImages = imageMetadata.filter((image) => image.sheetIndex === sheet.index);
+    const rows = sheet.rows.map((row) => {
+      const rowImages = sheetImages.filter((image) => image.sourceRow === Number(row.__sourceRow));
+      if (!rowImages.length) return row;
+      const firstImage = rowImages[0];
+      const imageHeader = sheet.headers[firstImage.sourceColumn - 1];
+      return {
+        ...row,
+        ...(imageHeader && !String(row[imageHeader] ?? "").trim() ? { [imageHeader]: firstImage.url } : {}),
+        __imageUrl: firstImage.url,
+        __imageUrls: rowImages.map((image) => image.url),
+      };
+    });
+    return { ...sheet, rows, previewRows: rows.slice(0, 50), images: sheetImages };
+  });
   const groupKey = sourceGroupKey(filename) || fileHash;
   const [sourceGroup] = await sqlQuery<{ id: number }>(`INSERT INTO import_source_groups(group_key,project_hint) VALUES($1,$2) ON CONFLICT(group_key) DO UPDATE SET project_hint=COALESCE(EXCLUDED.project_hint,import_source_groups.project_hint),last_seen_at=now() RETURNING id`, [groupKey, analysis.projectCandidate?.name ?? null]);
   const [pathMatch] = options.sourcePath ? await sqlQuery<{ batchId: number; fileHash: string; batchNumber: string; versionNumber: number }>(`SELECT b.id AS "batchId",f.file_hash AS "fileHash",b.batch_number AS "batchNumber",f.version_number AS "versionNumber" FROM import_files f JOIN import_batches b ON b.id=f.batch_id WHERE lower(f.source_path)=lower($1) ORDER BY f.created_at DESC LIMIT 1`, [options.sourcePath]) : [];
@@ -237,12 +264,19 @@ export async function createMigrationWorkbook(file: File, user: SessionUser, opt
   const [version] = await sqlQuery<{ versionNumber: number }>(`SELECT COALESCE(max(version_number),0)::int AS "versionNumber" FROM import_files WHERE source_group_id=$1`, [sourceGroup.id]);
   const versionNumber = fingerprintStatus === "UNCHANGED" || fingerprintStatus === "DUPLICATE" ? Number(pathMatch?.versionNumber ?? hashMatch?.versionNumber ?? 1) : Number(version.versionNumber) + 1;
   const isCurrent = fingerprintStatus === "NEW" || fingerprintStatus === "UPDATED";
+  const storageRoot = resolve(process.env.IMPORT_STORAGE_DIR ?? "./data/imports");
   const storageKey = `${batchNumber}/${filename}`;
-  const storagePath = resolve(process.env.IMPORT_STORAGE_DIR ?? "./data/imports", storageKey);
-  await mkdir(resolve(storagePath, ".."), { recursive: true });
+  const batchStoragePath = resolve(storageRoot, batchNumber);
+  const storagePath = resolve(batchStoragePath, filename);
+  await mkdir(batchStoragePath, { recursive: true });
   await writeFile(storagePath, bytes, { flag: "wx" });
+  if (embeddedImages.length) {
+    const imageStoragePath = resolve(batchStoragePath, "images");
+    await mkdir(imageStoragePath, { recursive: true });
+    await Promise.all(embeddedImages.map((image) => writeFile(resolve(imageStoragePath, image.filename), image.bytes, { flag: "wx" })));
+  }
   const sourceChannel = options.channel ?? "UPLOAD_UI";
-  const workbookStructure = { filename, sheetCount: sheets.length, sheets: sheets.map((sheet) => ({ name: sheet.name, rows: sheet.rowCount, columns: sheet.columnCount, headerRow: sheet.headerRow, classification: sheet.classification, recognizedFacts: analysis.facts.filter((fact) => fact.sheetIndex === sheet.index).map((fact) => fact.factType) })) };
+  const workbookStructure = { filename, sheetCount: sheets.length, imageCount: embeddedImages.length, sheets: sheets.map((sheet) => ({ name: sheet.name, rows: sheet.rowCount, columns: sheet.columnCount, headerRow: sheet.headerRow, imageCount: sheet.imageCount ?? 0, classification: sheet.classification, recognizedFacts: analysis.facts.filter((fact) => fact.sheetIndex === sheet.index).map((fact) => fact.factType) })) };
   const statements: TransactionStatement[] = [
     { query: `INSERT INTO import_batches(batch_number,company_id,project_id,user_id,source_hash,source_channel,scope_type,context_confirmed,project_candidate,project_conflict,analysis_summary,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12) RETURNING id`, params: [batchNumber, companyId, projectId, user.id, fileHash, sourceChannel, scope, contextConfirmed, analysis.projectCandidate?.name ?? null, JSON.stringify(projectConflict), JSON.stringify(analysis), projectConflict ? "PROJECT_CONFLICT" : "UPLOADED"] },
     { query: `INSERT INTO import_files(batch_id,source_group_id,project_id,filename,source_path,extension,file_size,file_hash,modified_at,workbook_structure,fingerprint_status,managed_storage_key,version_number,is_current,channel,sheet_count) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16) RETURNING id`, params: [{ fromResult: 0, key: "id" }, sourceGroup.id, projectId, filename, options.sourcePath ?? null, extname(filename).toLowerCase(), file.size, fileHash, options.modifiedAt ?? null, JSON.stringify(workbookStructure), fingerprintStatus, storageKey, versionNumber, isCurrent, sourceChannel, sheets.length] },
@@ -250,7 +284,7 @@ export async function createMigrationWorkbook(file: File, user: SessionUser, opt
   for (const sheet of sheets) {
     const sheetFacts = analysis.facts.filter((fact) => fact.sheetIndex === sheet.index);
     const sheetConfidence = sheetFacts.length ? Math.round(sheetFacts.reduce((sum, fact) => sum + fact.confidence, 0) / sheetFacts.length) : sheet.classificationConfidence;
-    statements.push({ query: `INSERT INTO import_sheets(batch_id,file_id,project_id,sheet_index,name,row_count,column_count,headers,preview_rows,raw_rows,classification,classification_confidence,classification_warnings,is_empty,structure,recognized_facts,analysis_confidence) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13::jsonb,$14,$15::jsonb,$16::jsonb,$17) RETURNING id`, params: [{ fromResult: 0, key: "id" }, { fromResult: 1, key: "id" }, projectId, sheet.index, sheet.name, sheet.rowCount, sheet.columnCount, JSON.stringify(sheet.headers), JSON.stringify(sheet.previewRows), JSON.stringify(sheet.rows), sheet.classification, sheet.classificationConfidence, JSON.stringify(sheet.classificationWarnings), sheet.isEmpty, JSON.stringify({ headerRow: sheet.headerRow, signature: sheet.signature, titleValues: sheet.titleValues ?? [] }), JSON.stringify(sheetFacts), sheetConfidence] });
+    statements.push({ query: `INSERT INTO import_sheets(batch_id,file_id,project_id,sheet_index,name,row_count,column_count,headers,preview_rows,raw_rows,classification,classification_confidence,classification_warnings,is_empty,structure,recognized_facts,analysis_confidence) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13::jsonb,$14,$15::jsonb,$16::jsonb,$17) RETURNING id`, params: [{ fromResult: 0, key: "id" }, { fromResult: 1, key: "id" }, projectId, sheet.index, sheet.name, sheet.rowCount, sheet.columnCount, JSON.stringify(sheet.headers), JSON.stringify(sheet.previewRows), JSON.stringify(sheet.rows), sheet.classification, sheet.classificationConfidence, JSON.stringify(sheet.classificationWarnings), sheet.isEmpty, JSON.stringify({ headerRow: sheet.headerRow, signature: sheet.signature, titleValues: sheet.titleValues ?? [], imageCount: sheet.imageCount ?? 0, images: sheet.images ?? [] }), JSON.stringify(sheetFacts), sheetConfidence] });
   }
   for (const fact of facts) {
     const factResultIndex = statements.length;
@@ -259,7 +293,7 @@ export async function createMigrationWorkbook(file: File, user: SessionUser, opt
   }
   let results: Record<string, unknown>[][];
   try { results = await runTransaction<Record<string, unknown>>(statements); }
-  catch (error) { await unlink(storagePath).catch(() => undefined); throw error; }
+  catch (error) { await rm(batchStoragePath, { recursive: true, force: true }).catch(() => undefined); throw error; }
   const batchId = Number(results[0][0].id);
   if (isCurrent) await sqlQuery(`UPDATE import_files SET is_current=(id=$1) WHERE source_group_id=$2`, [Number(results[1][0].id), sourceGroup.id]);
   const templates = await sqlQuery<{ id: number; name: string; businessType: string; signature: string; mappings: Record<string, string> }>(`SELECT id,name,business_type AS "businessType",sheet_signature AS signature,field_mappings AS mappings FROM import_mapping_templates WHERE company_id IS NULL OR company_id=$1`, [user.companyId]);
@@ -268,7 +302,8 @@ export async function createMigrationWorkbook(file: File, user: SessionUser, opt
     batchId, batchNumber, filename, fileSize: file.size, sheetCount: sheets.length, sourceChannel,
     scope, projectId, companyId, contextConfirmed, projectConflict, analysis,
     fingerprintStatus, versionNumber, sourceGroupKey: groupKey, duplicateOf: (pathMatch ?? hashMatch)?.batchNumber ?? null, duplicateOfBatchId: (pathMatch ?? hashMatch)?.batchId ?? null,
-    sheets: sheets.map((sheet, index) => ({ id: Number(results[index + 2][0].id), name: sheet.name, rowCount: sheet.rowCount, columnCount: sheet.columnCount, headers: sheet.headers, previewRows: sheet.previewRows, classification: sheet.classification, classificationConfidence: sheet.classificationConfidence, classificationWarnings: sheet.classificationWarnings, recognizedFacts: analysis.facts.filter((fact) => fact.sheetIndex === sheet.index), learnedMappings: Object.fromEntries(migrationDefinitionsForAliases(learnedAliases, sheet.headers)), matchedTemplate: templates.find((template) => template.signature === sheet.signature) ?? null })),
+    imageCount: embeddedImages.length,
+    sheets: sheets.map((sheet, index) => ({ id: Number(results[index + 2][0].id), name: sheet.name, rowCount: sheet.rowCount, columnCount: sheet.columnCount, imageCount: sheet.imageCount ?? 0, headers: sheet.headers, previewRows: sheet.previewRows, classification: sheet.classification, classificationConfidence: sheet.classificationConfidence, classificationWarnings: sheet.classificationWarnings, recognizedFacts: analysis.facts.filter((fact) => fact.sheetIndex === sheet.index), learnedMappings: Object.fromEntries(migrationDefinitionsForAliases(learnedAliases, sheet.headers)), matchedTemplate: templates.find((template) => template.signature === sheet.signature) ?? null })),
   };
 }
 
@@ -293,7 +328,8 @@ export async function bindMigrationContext(input: {
   const projectId = project?.id ?? null;
   const companyId = project?.companyId ?? company?.id ?? (input.scope === "MASTER" ? user.companyId : null);
   const analysis = jsonValue<IntelligentWorkbookAnalysis | null>(batch.analysis_summary, null);
-  const conflict = project ? detectProjectConflict(project.name, analysis?.projectCandidate ?? null) : null;
+  const viableProjectCandidate = analysis?.projectCandidate && extractProjectCandidate(analysis.projectCandidate.name) ? analysis.projectCandidate : null;
+  const conflict = project ? detectProjectConflict(project.name, viableProjectCandidate) : null;
   const contextConfirmed = !conflict || Boolean(input.overrideConflict);
   const nextStatus = conflict && !input.overrideConflict ? "PROJECT_CONFLICT" : "UPLOADED";
   const conflictJson = conflict && !input.overrideConflict ? JSON.stringify(conflict) : null;
@@ -351,26 +387,53 @@ async function saveMappingTemplate(user: SessionUser, name: string, businessType
   return templateId;
 }
 
-export async function stageMigrationBatch(input: { batchId: number; sheetId: number; businessType: ResourceKey; mappings: Record<string, string>; saveTemplateName?: string }, user: SessionUser) {
+export async function stageMigrationBatch(input: { batchId: number; sheetId: number; businessType: ResourceKey; mappings: Record<string, string>; saveTemplateName?: string; autoAllSheets?: boolean }, user: SessionUser) {
   const batch = await requireBatch(input.batchId, user); assertCan(user, "imports", "write");
-  if (user.role !== "owner") assertCan(user, input.businessType, "write");
+  const autoAllSheets = Boolean(input.autoAllSheets);
+  const businessType: ResourceKey = autoAllSheets ? "skus" : input.businessType;
+  if (user.role !== "owner") assertCan(user, businessType, "write");
   if (["COMPLETED", "ROLLED_BACK"].includes(String(batch.status))) throw new Error("已完成或已撤销的批次不能重新暂存");
   if (String(batch.status) === "PROJECT_CONFLICT" || (String(batch.scope_type) === "PROJECT" && !Boolean(batch.context_confirmed))) throw new Error("PROJECT_CONFLICT：请先确认目标项目");
-  const definition = migrationDefinition(input.businessType); if (!definition) throw new Error("不支持的业务类型");
+  const definition = migrationDefinition(businessType); if (!definition) throw new Error("不支持的业务类型");
   const projectScopedTypes = new Set<ResourceKey>(["contracts", "receivables", "receipts", "skus", "quotes", "purchase-requests", "payables", "payments", "invoices"]);
   const batchProjectId = batch.project_id === null ? null : Number(batch.project_id);
   const batchCompanyId = batch.company_id === null ? null : Number(batch.company_id);
   const contextBound = Boolean(batch.context_confirmed);
-  if (projectScopedTypes.has(input.businessType) && (!batchProjectId || String(batch.scope_type) !== "PROJECT")) throw new Error("PROJECT_CONTEXT_REQUIRED");
-  const [sheet] = await sqlQuery<{ id: number; headers: string[]; rawRows: Record<string, unknown>[] }>(`SELECT id,headers,raw_rows AS "rawRows" FROM import_sheets WHERE id=$1 AND batch_id=$2`, [input.sheetId, input.batchId]);
-  if (!sheet) throw new Error("Sheet 不存在");
-  const headers = jsonValue(sheet.headers, [] as string[]); const rawRows = jsonValue(sheet.rawRows, [] as Record<string, unknown>[]);
-  const mappedTargets = new Set(Object.values(input.mappings).filter(Boolean));
-  const missing = definition.fields.filter((field) => field.required && !mappedTargets.has(field.key) && !(field.key === "projectId" && contextBound && batchProjectId) && !(field.key === "companyId" && contextBound && batchCompanyId));
-  if (missing.length) throw new Error(`缺少必填字段映射：${missing.map((field) => field.displayLabel).join("、")}`);
-  const catalog = await loadCatalog(user); const duplicates = await existingDuplicates(input.businessType); const seen = new Set<string>();
-  const staged = rawRows.map((raw, index) => {
-    const normalized = applyFieldMapping(input.businessType, raw, input.mappings); const issues: MigrationIssue[] = []; const resolutions: Resolution[] = [];
+  if (projectScopedTypes.has(businessType) && (!batchProjectId || String(batch.scope_type) !== "PROJECT")) throw new Error("PROJECT_CONTEXT_REQUIRED");
+  type StageSheet = { id: number; name: string; sheetIndex: number; classification: string; headers: string[]; rawRows: Record<string, unknown>[] };
+  const sourceSheets = autoAllSheets
+    ? await sqlQuery<StageSheet>(`SELECT id,name,sheet_index AS "sheetIndex",classification,headers,raw_rows AS "rawRows" FROM import_sheets WHERE batch_id=$1 AND classification IN ('SKU_DETAIL','SUPPLIER_QUOTE','PURCHASE_ORDER') AND NOT is_empty ORDER BY sheet_index`, [input.batchId])
+    : await sqlQuery<StageSheet>(`SELECT id,name,sheet_index AS "sheetIndex",classification,headers,raw_rows AS "rawRows" FROM import_sheets WHERE id=$1 AND batch_id=$2`, [input.sheetId, input.batchId]);
+  if (!sourceSheets.length) throw new Error(autoAllSheets ? "没有识别到可自动导入的产品明细 Sheet" : "Sheet 不存在");
+  const generatedSkuFields = new Set(["projectId", "code", "room", "category", "name", "unit", "imageUrl"]);
+  if (!autoAllSheets) {
+    const mappedTargets = new Set(Object.values(input.mappings).filter(Boolean));
+    const missing = definition.fields.filter((field) => field.required && !mappedTargets.has(field.key) && !(field.key === "projectId" && contextBound && batchProjectId) && !(field.key === "companyId" && contextBound && batchCompanyId) && !(businessType === "skus" && generatedSkuFields.has(field.key)));
+    if (missing.length) throw new Error(`缺少必填字段映射：${missing.map((field) => field.displayLabel).join("、")}`);
+  }
+  const catalog = await loadCatalog(user); const duplicates = await existingDuplicates(businessType); const seen = new Set<string>();
+  const rawValue = (raw: Record<string, unknown>, patterns: RegExp[]) => Object.entries(raw).find(([key, value]) => key !== "__sourceRow" && patterns.some((pattern) => pattern.test(normalizeHeader(key))) && String(value ?? "").trim())?.[1];
+  const staged = sourceSheets.flatMap((sheet) => {
+    const headers = jsonValue(sheet.headers, [] as string[]);
+    const mappings = autoAllSheets ? suggestFieldMappings("skus", headers) : input.mappings;
+    const rawRows = jsonValue(sheet.rawRows, [] as Record<string, unknown>[]);
+    return rawRows.flatMap((raw, index) => {
+    const normalized = applyFieldMapping(businessType, raw, mappings); const issues: MigrationIssue[] = []; const resolutions: Resolution[] = [];
+    if (businessType === "skus") {
+      const sourceRow = Number(raw.__sourceRow ?? index + 2);
+      const specification = String(rawValue(raw, [/规格/u, /型号/u, /尺寸/u]) ?? "").trim();
+      const material = String(rawValue(raw, [/材质/u]) ?? "").trim();
+      normalized.projectId = batchProjectId;
+      normalized.code = String(normalized.code ?? "").trim() || `${String(batch.batch_number).replace("IMP-", "SKU-")}-S${sheet.sheetIndex + 1}-R${sourceRow}`;
+      normalized.room = String(normalized.room ?? "").trim() || String(rawValue(raw, [/空间/u, /区域/u, /位置/u, /摆放/u]) ?? sheet.name).trim();
+      normalized.category = String(normalized.category ?? "").trim() || sheet.name.trim();
+      normalized.name = String(normalized.name ?? "").trim() || String(rawValue(raw, [/产品名称/u, /品名/u, /^型号$/u, /^名称$/u]) ?? "").trim() || [sheet.name.trim(), specification, material].filter(Boolean).join(" · ").slice(0, 120);
+      normalized.quantity = parseQuantity(normalized.quantity ?? rawValue(raw, [/数量/u]));
+      normalized.unit = String(normalized.unit ?? "").trim() || String(rawValue(raw, [/单位/u]) ?? "件").trim();
+      normalized.budgetUnitYuan = parseAmount(normalized.budgetUnitYuan ?? rawValue(raw, [/单价/u, /^价格$/u, /预算价/u]));
+      normalized.imageUrl = String(normalized.imageUrl ?? raw.__imageUrl ?? "").trim();
+      if (autoAllSheets && (!(Number(normalized.quantity) > 0) || !(Number(normalized.budgetUnitYuan) > 0) || (!String(normalized.name).trim() && !String(normalized.imageUrl).trim()))) return [];
+    }
     let companyId = contextBound ? batchCompanyId ?? user.companyId : user.companyId;
     for (const field of definition.fields.filter((item) => item.reference === "company")) {
       if (contextBound && batchCompanyId) { normalized[field.key] = batchCompanyId; companyId = batchCompanyId; continue; }
@@ -396,10 +459,10 @@ export async function stageMigrationBatch(input: { batchId: number; sheetId: num
       const messages: Record<ResolutionStatus, string> = { EXACT_MATCH: "精确匹配", POSSIBLE_MATCH: "存在一个可能匹配项，请人工确认", NOT_FOUND: "未找到关联对象", MULTIPLE_MATCHES: "存在多个匹配项，请人工选择" };
       issues.push({ field: definition.fields.find((field) => field.key === resolution.fieldKey)?.displayLabel ?? resolution.fieldKey, severity, code: resolution.status, message: messages[resolution.status] });
     }
-    issues.push(...validateMigrationRow(input.businessType, normalized));
+    issues.push(...validateMigrationRow(businessType, normalized));
     for (const key of Object.keys(normalized).filter((key) => key.endsWith("Yuan") && key !== "balanceYuan")) if (!(Number(normalized[key]) > 0)) issues.push({ field: definition.fields.find((field) => field.key === key)?.displayLabel ?? key, severity: "ERROR", code: "FINANCIAL_AMOUNT", message: "业务金额必须大于 0" });
     if (!scopeAllowed(user, companyId)) issues.push({ field: "公司范围", severity: "ERROR", code: "SCOPE", message: "不能迁移其他公司数据" });
-    const rule = duplicateRules[input.businessType]; let duplicateStatus = "NEW"; let duplicateTargetId: number | null = null; let action = "CREATE";
+    const rule = duplicateRules[businessType]; let duplicateStatus = "NEW"; let duplicateTargetId: number | null = null; let action = "CREATE";
     if (rule) {
       const value = String(normalized[rule.field] ?? ""); const scopeId = rule.companyScoped ? companyId : rule.scopeField ? normalized[rule.scopeField] : "global"; const key = `${scopeId}:${normalizeHeader(value)}`;
       if (seen.has(key)) { duplicateStatus = "POSSIBLE_DUPLICATE"; action = "SKIP"; issues.push({ field: rule.field, severity: "ERROR", code: "FILE_DUPLICATE", message: "文件内存在重复唯一值" }); }
@@ -407,11 +470,13 @@ export async function stageMigrationBatch(input: { batchId: number; sheetId: num
       if (duplicates.has(key)) { duplicateStatus = "EXISTING"; duplicateTargetId = duplicates.get(key)!; action = rule.financial ? "SKIP" : "MATCH"; issues.push({ field: rule.field, severity: "WARNING", code: "EXISTING", message: rule.financial ? "财务事实已存在，默认跳过且禁止覆盖" : "基础资料已存在，默认匹配现有记录" }); }
     }
     const status = issues.some((issue) => issue.severity === "ERROR") ? "ERROR" : issues.length ? "WARNING" : "READY";
-    return { sourceRow: Number(raw.__sourceRow ?? index + 2), raw, normalized, issues, resolutions, status, duplicateStatus, duplicateTargetId, action };
+    return [{ sheetId: Number(sheet.id), sourceRow: Number(raw.__sourceRow ?? index + 2), raw, normalized, issues, resolutions, status, duplicateStatus, duplicateTargetId, action }];
   });
+  });
+  if (autoAllSheets && !staged.length) throw new Error("识别到了产品 Sheet，但没有找到同时包含数量和单价的有效产品行");
   const eligible = staged.map((row, index) => ({ row, index })).filter(({ row }) => row.action === "CREATE" && !row.issues.some((issue) => issue.severity === "ERROR"));
   if (eligible.length) {
-    const businessPreflight = await preflightImport(input.businessType, eligible.map(({ row }) => row.normalized), user, { ownerMigration: true });
+    const businessPreflight = await preflightImport(businessType, eligible.map(({ row }) => row.normalized), user, { ownerMigration: true });
     for (const error of businessPreflight.errors) {
       const target = eligible[Math.max(0, error.row - 2)]?.row; if (!target) continue;
       if (!target.issues.some((issue) => issue.message === error.message && issue.field === error.field)) target.issues.push({ field: error.field, severity: "ERROR", code: "BUSINESS_RULE", message: error.message });
@@ -423,22 +488,27 @@ export async function stageMigrationBatch(input: { batchId: number; sheetId: num
     const statements: TransactionStatement[] = [];
     for (const row of staged.slice(offset, offset + 250)) {
       const resultIndex = statements.length;
-      statements.push({ query: `INSERT INTO import_staging_rows(batch_id,sheet_id,project_id,business_type,source_row,raw_data,normalized_data,issues,duplicate_status,duplicate_target_id,action,status) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9,$10,$11,$12) RETURNING id`, params: [input.batchId, input.sheetId, batchProjectId, input.businessType, row.sourceRow, JSON.stringify(row.raw), JSON.stringify(row.normalized), JSON.stringify(row.issues), row.duplicateStatus, row.duplicateTargetId, row.action, row.status] });
+      statements.push({ query: `INSERT INTO import_staging_rows(batch_id,sheet_id,project_id,business_type,source_row,raw_data,normalized_data,issues,duplicate_status,duplicate_target_id,action,status) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9,$10,$11,$12) RETURNING id`, params: [input.batchId, row.sheetId, batchProjectId, businessType, row.sourceRow, JSON.stringify(row.raw), JSON.stringify(row.normalized), JSON.stringify(row.issues), row.duplicateStatus, row.duplicateTargetId, row.action, row.status] });
       for (const resolution of row.resolutions) statements.push({ query: `INSERT INTO import_reference_resolutions(batch_id,staging_row_id,field_key,entity_type,input_value,status,resolved_entity_id,candidates) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`, params: [input.batchId, { fromResult: resultIndex, key: "id" }, resolution.fieldKey, resolution.entityType, resolution.inputValue, resolution.status, resolution.resolvedEntityId, JSON.stringify(resolution.candidates.slice(0, 8))] });
     }
     await runTransaction(statements);
   }
   const counts = { ready: staged.filter((row) => row.status === "READY").length, warning: staged.filter((row) => row.status === "WARNING").length, error: staged.filter((row) => row.status === "ERROR").length };
-  const mappingTemplateId = input.saveTemplateName?.trim() ? await saveMappingTemplate(user, input.saveTemplateName.trim(), input.businessType, headers, input.mappings) : null;
-  await sqlQuery(`UPDATE import_sheets SET selected=(id=$1) WHERE batch_id=$2`, [input.sheetId, input.batchId]);
-  await sqlQuery(`UPDATE import_batches SET business_type=$1,mapping_template_id=$2,total_rows=$3,ready_rows=$4,warning_rows=$5,error_rows=$6,status='VALIDATED',error_message=NULL,updated_at=now() WHERE id=$7`, [input.businessType, mappingTemplateId, staged.length, counts.ready, counts.warning, counts.error, input.batchId]);
-  return { ...counts, total: staged.length };
+  const firstHeaders = jsonValue(sourceSheets[0].headers, [] as string[]);
+  const mappingTemplateId = !autoAllSheets && input.saveTemplateName?.trim() ? await saveMappingTemplate(user, input.saveTemplateName.trim(), businessType, firstHeaders, input.mappings) : null;
+  const selectedSheetIds = sourceSheets.map((sheet) => Number(sheet.id));
+  await runTransaction([
+    { query: `UPDATE import_sheets SET selected=(id = ANY($1::int[])) WHERE batch_id=$2`, params: [selectedSheetIds, input.batchId] },
+    ...(autoAllSheets ? [{ query: `UPDATE import_business_facts SET status=CASE WHEN fact_type='SKU' THEN 'AUTO_ACCEPTED' WHEN status='REQUIRES_CONFIRMATION' THEN 'IGNORED' ELSE status END WHERE batch_id=$1`, params: [input.batchId] }] : []),
+    { query: `UPDATE import_batches SET business_type=$1,mapping_template_id=$2,total_rows=$3,ready_rows=$4,warning_rows=$5,error_rows=$6,status='VALIDATED',error_message=NULL,updated_at=now() WHERE id=$7`, params: [businessType, mappingTemplateId, staged.length, counts.ready, counts.warning, counts.error, input.batchId] },
+  ]);
+  return { ...counts, total: staged.length, sheetCount: sourceSheets.length, imageRows: staged.filter((row) => String(row.normalized.imageUrl ?? "")).length, automatic: autoAllSheets };
 }
 
 export async function getMigrationOverview(user: SessionUser) {
   assertCan(user, "imports");
   const scope = user.role === "owner" ? { sql: "TRUE", params: [] as unknown[] } : { sql: `(b.company_id=$1 OR EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id=b.project_id AND pm.user_id=$2))`, params: [user.companyId, user.id] as unknown[] };
-  const batches = await sqlQuery<Record<string, unknown>>(`SELECT b.id,b.batch_number AS "batchNumber",b.business_type AS "businessType",b.scope_type AS "scopeType",b.project_id AS "projectId",p.name AS "projectName",b.project_candidate AS "projectCandidate",b.context_confirmed AS "contextConfirmed",b.project_conflict AS "projectConflict",b.analysis_summary AS analysis,b.source_hash AS "sourceHash",b.source_channel AS "sourceChannel",b.status,b.total_rows AS "totalRows",b.ready_rows AS "readyRows",b.warning_rows AS "warningRows",b.error_rows AS "errorRows",b.success_rows AS "successRows",b.skipped_rows AS "skippedRows",b.created_at AS "createdAt",f.filename,s.name AS "sheetName",m.name AS "mappingName",u.name AS "userName" FROM import_batches b LEFT JOIN projects p ON p.id=b.project_id LEFT JOIN import_files f ON f.batch_id=b.id LEFT JOIN import_sheets s ON s.batch_id=b.id AND s.selected LEFT JOIN import_mapping_templates m ON m.id=b.mapping_template_id JOIN users u ON u.id=b.user_id WHERE ${scope.sql} ORDER BY b.created_at DESC LIMIT 30`, scope.params);
+  const batches = await sqlQuery<Record<string, unknown>>(`SELECT b.id,b.batch_number AS "batchNumber",b.business_type AS "businessType",b.scope_type AS "scopeType",b.project_id AS "projectId",p.name AS "projectName",b.project_candidate AS "projectCandidate",b.context_confirmed AS "contextConfirmed",b.project_conflict AS "projectConflict",b.analysis_summary AS analysis,b.source_hash AS "sourceHash",b.source_channel AS "sourceChannel",b.status,b.total_rows AS "totalRows",b.ready_rows AS "readyRows",b.warning_rows AS "warningRows",b.error_rows AS "errorRows",b.success_rows AS "successRows",b.skipped_rows AS "skippedRows",b.created_at AS "createdAt",f.filename,(SELECT string_agg(s.name,' / ' ORDER BY s.sheet_index) FROM import_sheets s WHERE s.batch_id=b.id AND s.selected) AS "sheetName",m.name AS "mappingName",u.name AS "userName" FROM import_batches b LEFT JOIN projects p ON p.id=b.project_id LEFT JOIN import_files f ON f.batch_id=b.id LEFT JOIN import_mapping_templates m ON m.id=b.mapping_template_id JOIN users u ON u.id=b.user_id WHERE ${scope.sql} ORDER BY b.created_at DESC LIMIT 30`, scope.params);
   const [summary] = await sqlQuery<Record<string, unknown>>(`SELECT (SELECT count(*)::int FROM projects) AS projects,(SELECT count(*)::int FROM suppliers) AS suppliers,(SELECT count(*)::int FROM skus) AS skus,(SELECT count(*)::int FROM purchase_orders) AS purchases,(SELECT count(*)::int FROM payments WHERE NOT is_void) AS payments`);
   return { batches, summary, ...(await getImportContextOptions(user)) };
 }
@@ -446,12 +516,25 @@ export async function getMigrationOverview(user: SessionUser) {
 export async function getMigrationBatch(batchId: number, user: SessionUser, page = 1) {
   const batch = await requireBatch(batchId, user); const pageSize = 50; const offset = Math.max(0, page - 1) * pageSize;
   const [file] = await sqlQuery<Record<string, unknown>>(`SELECT project_id AS "projectId",filename,source_path AS "sourcePath",extension,file_size AS "fileSize",sheet_count AS "sheetCount",fingerprint_status AS "fingerprintStatus",version_number AS "versionNumber",channel,managed_storage_key AS "managedStorageKey" FROM import_files WHERE batch_id=$1`, [batchId]);
-  const sheets = await sqlQuery<Record<string, unknown>>(`SELECT id,project_id AS "projectId",name,row_count AS "rowCount",column_count AS "columnCount",headers,preview_rows AS "previewRows",classification,classification_confidence AS "classificationConfidence",classification_warnings AS "classificationWarnings",recognized_facts AS "recognizedFacts",analysis_confidence AS "analysisConfidence",is_empty AS "isEmpty",selected FROM import_sheets WHERE batch_id=$1 ORDER BY sheet_index`, [batchId]);
-  const rows = await sqlQuery<Record<string, unknown>>(`SELECT id,project_id AS "projectId",business_type AS "businessType",source_row AS "sourceRow",normalized_data AS "normalizedData",issues,duplicate_status AS "duplicateStatus",duplicate_target_id AS "duplicateTargetId",action,status,target_table AS "targetTable",target_id AS "targetId" FROM import_staging_rows WHERE batch_id=$1 ORDER BY source_row LIMIT $2 OFFSET $3`, [batchId, pageSize, offset]);
-  const resolutions = await sqlQuery<Record<string, unknown>>(`SELECT x.id,x.staging_row_id AS "stagingRowId",x.field_key AS "fieldKey",x.entity_type AS "entityType",x.input_value AS "inputValue",x.status,x.resolved_entity_id AS "resolvedEntityId",x.candidates FROM import_reference_resolutions x WHERE x.staging_row_id IN (SELECT id FROM import_staging_rows WHERE batch_id=$1 ORDER BY source_row LIMIT $2 OFFSET $3) AND x.status<>'EXACT_MATCH' ORDER BY x.staging_row_id,x.id`, [batchId, pageSize, offset]);
+  const sheets = await sqlQuery<Record<string, unknown>>(`SELECT id,project_id AS "projectId",name,row_count AS "rowCount",column_count AS "columnCount",COALESCE((structure->>'imageCount')::int,0) AS "imageCount",headers,preview_rows AS "previewRows",classification,classification_confidence AS "classificationConfidence",classification_warnings AS "classificationWarnings",recognized_facts AS "recognizedFacts",analysis_confidence AS "analysisConfidence",is_empty AS "isEmpty",selected FROM import_sheets WHERE batch_id=$1 ORDER BY sheet_index`, [batchId]);
+  const rows = await sqlQuery<Record<string, unknown>>(`SELECT r.id,r.project_id AS "projectId",r.business_type AS "businessType",r.source_row AS "sourceRow",s.name AS "sheetName",r.normalized_data AS "normalizedData",r.issues,r.duplicate_status AS "duplicateStatus",r.duplicate_target_id AS "duplicateTargetId",r.action,r.status,r.target_table AS "targetTable",r.target_id AS "targetId" FROM import_staging_rows r JOIN import_sheets s ON s.id=r.sheet_id WHERE r.batch_id=$1 ORDER BY s.sheet_index,r.source_row LIMIT $2 OFFSET $3`, [batchId, pageSize, offset]);
+  const resolutions = await sqlQuery<Record<string, unknown>>(`SELECT x.id,x.staging_row_id AS "stagingRowId",x.field_key AS "fieldKey",x.entity_type AS "entityType",x.input_value AS "inputValue",x.status,x.resolved_entity_id AS "resolvedEntityId",x.candidates FROM import_reference_resolutions x WHERE x.staging_row_id IN (SELECT r.id FROM import_staging_rows r JOIN import_sheets s ON s.id=r.sheet_id WHERE r.batch_id=$1 ORDER BY s.sheet_index,r.source_row LIMIT $2 OFFSET $3) AND x.status<>'EXACT_MATCH' ORDER BY x.staging_row_id,x.id`, [batchId, pageSize, offset]);
   const [blocking] = await sqlQuery<{ unresolved: number }>(`SELECT count(*)::int AS unresolved FROM import_reference_resolutions x JOIN import_staging_rows r ON r.id=x.staging_row_id WHERE x.batch_id=$1 AND x.status<>'EXACT_MATCH' AND r.action<>'SKIP'`, [batchId]);
   const facts = await sqlQuery<Record<string, unknown>>(`SELECT id,project_id AS "projectId",fact_type AS "factType",business_key AS "businessKey",payload,confidence,confidence_level AS "confidenceLevel",status FROM import_business_facts WHERE batch_id=$1 AND fact_type<>'COST_ITEM' ORDER BY confidence DESC,id`, [batchId]);
   return { batch, file, sheets, rows, resolutions, facts, unresolvedReferences: Number(blocking.unresolved), page, pageSize };
+}
+
+export async function getImportMedia(batchNumber: string, filename: string, user: SessionUser) {
+  if (!/^IMP-\d{8}-\d{4}$/u.test(batchNumber) || basename(filename) !== filename || !/^s\d+-r\d+-c\d+-\d+\.[a-z0-9]+$/iu.test(filename)) throw new Error("图片地址无效");
+  const [batch] = await sqlQuery<{ id: number }>(`SELECT id FROM import_batches WHERE batch_number=$1`, [batchNumber]);
+  if (!batch) throw new Error("导入图片不存在");
+  await requireBatch(Number(batch.id), user);
+  const [metadata] = await sqlQuery<{ mimeType: string }>(`SELECT image->>'mimeType' AS "mimeType" FROM import_sheets s CROSS JOIN LATERAL jsonb_array_elements(COALESCE(s.structure->'images','[]'::jsonb)) image WHERE s.batch_id=$1 AND image->>'filename'=$2 LIMIT 1`, [batch.id, filename]);
+  if (!metadata) throw new Error("导入图片不存在");
+  const imageRoot = resolve(process.env.IMPORT_STORAGE_DIR ?? "./data/imports", batchNumber, "images");
+  const imagePath = resolve(imageRoot, filename);
+  if (!imagePath.startsWith(`${imageRoot}${sep}`)) throw new Error("图片地址无效");
+  return { buffer: await readFile(imagePath), mimeType: metadata.mimeType };
 }
 
 export async function exportMigrationErrors(batchId: number, user: SessionUser) {

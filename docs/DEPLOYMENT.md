@@ -20,6 +20,10 @@ PGLITE_DATA_DIR=D:/zhiheng-data/finance-db
 PGLITE_SERVER_PORT=3199
 ALLOW_DEMO_SEED=false
 NEXT_PUBLIC_APP_NAME=织衡经营财务
+DATA_MODE=real
+REAL_DATA_INGEST_TOKEN=至少32字节的随机值
+REAL_DATA_INGEST_REQUESTS_PER_MINUTE=10
+REAL_DATA_INGEST_FILES_PER_HOUR=100
 ```
 
 `PGLITE_SERVER_PORT` 仅监听 `127.0.0.1`，不要暴露到公网。应用启动器会先启动数据库服务，再启动 Next.js，并在应用退出时关闭自己创建的数据库进程。
@@ -46,6 +50,7 @@ npm start -- -p 3000
 - 更换所有 Seed 密码，禁用不使用的账号。
 - 生产环境默认拒绝执行演示 Seed；仅隔离演示环境可临时设置 `ALLOW_DEMO_SEED=true`。
 - 使用至少 32 字节随机 `AUTH_SECRET`。
+- 使用独立的至少 32 字节 `REAL_DATA_INGEST_TOKEN`，不要使用 `NEXT_PUBLIC_` 前缀，也不要记录到日志。
 - 只通过 HTTPS 暴露 Next.js 端口。
 - 限制主机与备份目录访问权限。
 - 不把 `.env.local`、`data/` 或银行回单附件提交到 Git。

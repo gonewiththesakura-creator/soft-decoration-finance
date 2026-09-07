@@ -1,6 +1,17 @@
 # Version Status
 
-## Current: V1.7
+## Current: V1.7.1
+
+- The local Demo database reset is explicitly authorized and now backs up PGlite, attachments and managed import originals before clearing all business, import, audit and AI-run data.
+- `POST /api/real-data/ingest/files` accepts token-authenticated XLSX, XLS and CSV submissions only in real mode and stops at `UPLOADED` staging.
+- External submissions support multi-file limits, request size enforcement, constant-time Bearer comparison, idempotency replay, SHA-256 duplicate reporting, rate limits and dedicated audit records.
+- `GET /api/real-data/ingest/status` reports whether all business tables are empty; `GET /api/real-data/ingest/batches/:id` returns bounded batch and staging metadata without raw rows.
+- The import center identifies `UPLOAD_UI`, `FOLDER` and `EXTERNAL_API` batch sources. Formal import remains an Owner-operated preview and confirmation action.
+- The automated suite now includes 9 isolated real-mode external-ingest tests plus the existing 59 unit and integration tests.
+
+See `docs/V1.7.1-EXTERNAL-REAL-DATA-INGEST.md` for authentication, examples, limits and the localhost boundary.
+
+## Previous: V1.7
 
 - Real data is the default operating mode. Startup bootstraps only one owner account and never inserts Demo business records.
 - Demo seeding and destructive Schema rebuild are restricted to explicit `DATA_MODE=demo` commands.
@@ -9,7 +20,7 @@
 - SHA-256 fingerprints, source groups, file versions, managed originals, Sheet classifications, business facts, source evidence and expanded lineage are persisted.
 - Dashboard, finance and procurement surfaces show a guided real-data empty state instead of fabricated zero-value conclusions.
 - Real-mode confirmation requires the exact phrase “确认导入真实数据”; formal import and rollback retain the existing transaction and dependency guards.
-- The automated suite covers 59 unit and integration tests, including an isolated real bootstrap/reset cycle.
+- The V1.7 automated suite covered 59 unit and integration tests, including an isolated real bootstrap/reset cycle.
 - The named Qingdao pilot workbook was not found locally; final manual upload and source-data reconciliation remain a user-operated acceptance gate.
 
 See `docs/V1.7-REAL-DATA-PILOT.md` for controls, limits and the remaining manual pilot steps.

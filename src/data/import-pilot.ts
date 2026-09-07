@@ -39,6 +39,21 @@ export function sourceGroupKey(filename: string) {
     .replace(/v\d+(?:\.\d+)*/giu, ""));
 }
 
+function validateFileSignature(bytes: Buffer, filename: string) {
+  const extension = filename.slice(filename.lastIndexOf(".")).toLowerCase();
+  if (extension === ".xlsx" && !(bytes[0] === 0x50 && bytes[1] === 0x4b)) throw new Error("XLSX 文件结构无效");
+  if (extension === ".xls") {
+    const ole = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
+    if (!ole.every((value, index) => bytes[index] === value)) throw new Error("XLS 文件结构无效");
+  }
+  if (extension === ".csv") {
+    if (bytes.includes(0) || !bytes.length) throw new Error("CSV 文件结构无效");
+    const sample = bytes.subarray(0, Math.min(bytes.length, 8192)).toString("utf8");
+    const controlCharacters = [...sample].filter((character) => character < " " && !["\r", "\n", "\t"].includes(character)).length;
+    if (controlCharacters > Math.max(2, sample.length / 100)) throw new Error("CSV 文件结构无效");
+  }
+}
+
 function uniqueHeaders(values: unknown[]) {
   const seen = new Map<string, number>();
   return values.map((value, index) => {
@@ -96,7 +111,8 @@ export function classifySheet(name: string, headers: string[], rowCount: number)
 
 export function parseWorkbook(bytes: Buffer, filename: string): ParsedSheet[] {
   if (!isSupportedImportFile(filename)) throw new Error("仅支持 .xlsx / .xls / .csv 文件");
-  const book = XLSX.read(bytes, { type: "buffer", cellDates: false });
+  validateFileSignature(bytes, filename);
+  const book = XLSX.read(bytes, { type: "buffer", cellDates: false, cellFormula: false, cellHTML: false, bookVBA: false });
   if (!book.SheetNames.length) throw new Error("工作簿中没有 Sheet");
   return book.SheetNames.map((name, index) => {
     const matrix = XLSX.utils.sheet_to_json<unknown[]>(book.Sheets[name], { header: 1, defval: "", raw: true, blankrows: false });

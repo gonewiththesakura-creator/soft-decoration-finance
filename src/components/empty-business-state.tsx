@@ -2,8 +2,8 @@ import Link from "next/link";
 import { FolderOpen, Upload } from "lucide-react";
 
 export function EmptyBusinessState({
-  title = "尚未导入真实业务数据",
-  description = "完成首次数据迁移后，这里会显示可追溯的经营与财务结果。",
+  title = "暂无经营数据",
+  description = "请上传真实数据后开始使用。",
   canImport = false,
   canScan = false,
 }: {

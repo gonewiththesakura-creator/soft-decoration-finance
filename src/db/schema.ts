@@ -533,6 +533,7 @@ export const importBatches = pgTable("import_batches", {
   mode: text("mode").notNull().default("HISTORY"),
   businessType: text("business_type"),
   sourceHash: text("source_hash").notNull(),
+  sourceChannel: text("source_channel").notNull().default("UPLOAD_UI"),
   mappingTemplateId: integer("mapping_template_id").references(() => importMappingTemplates.id),
   totalRows: integer("total_rows").notNull().default(0),
   readyRows: integer("ready_rows").notNull().default(0),
@@ -572,8 +573,36 @@ export const importFiles = pgTable("import_files", {
   managedStorageKey: text("managed_storage_key"),
   versionNumber: integer("version_number").notNull().default(1),
   isCurrent: boolean("is_current").notNull().default(true),
-  channel: text("channel").notNull().default("UPLOAD"),
+  channel: text("channel").notNull().default("UPLOAD_UI"),
   sheetCount: integer("sheet_count").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const realDataIngestRequests = pgTable("real_data_ingest_requests", {
+  id: serial("id").primaryKey(),
+  idempotencyKey: text("idempotency_key"),
+  remoteIp: text("remote_ip").notNull(),
+  sourceChannel: text("source_channel").notNull().default("EXTERNAL_API"),
+  receivedFiles: integer("received_files").notNull().default(0),
+  totalBytes: integer("total_bytes").notNull().default(0),
+  status: text("status").notNull().default("PROCESSING"),
+  httpStatus: integer("http_status"),
+  response: jsonb("response"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+}, (table) => [uniqueIndex("real_data_ingest_idempotency_idx").on(table.idempotencyKey)]);
+
+export const realDataIngestAudit = pgTable("real_data_ingest_audit", {
+  id: serial("id").primaryKey(),
+  requestId: integer("request_id").references(() => realDataIngestRequests.id),
+  batchId: integer("batch_id").references(() => importBatches.id),
+  sourceChannel: text("source_channel").notNull().default("EXTERNAL_API"),
+  remoteIp: text("remote_ip").notNull(),
+  filename: text("filename").notNull(),
+  fileSize: integer("file_size").notNull(),
+  sha256: text("sha256"),
+  result: text("result").notNull(),
+  idempotencyKey: text("idempotency_key"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

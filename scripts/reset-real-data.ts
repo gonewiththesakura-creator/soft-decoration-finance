@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { cp, mkdir, rm, writeFile } from "node:fs/promises";
+import { parse, relative, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { getDataMode } from "../src/lib/data-mode";
@@ -17,7 +17,7 @@ const businessTables = [
 
 const truncateTables = [
   ...businessTables.filter((table) => table !== "companies"),
-  "audit_logs", "attachments", "login_attempts", "import_jobs", "import_mapping_templates", "import_batches",
+  "audit_logs", "attachments", "login_attempts", "import_jobs", "import_mapping_templates", "real_data_ingest_audit", "real_data_ingest_requests", "import_batches",
   "import_files", "import_sheets", "entity_aliases", "import_staging_rows", "import_reference_resolutions",
   "import_data_lineage", "import_source_groups", "field_aliases", "import_business_facts",
   "import_business_fact_evidence", "ai_queries", "ai_conversations", "ai_messages", "ai_runs", "ai_tool_calls",
@@ -32,6 +32,36 @@ async function assertDatabaseServiceStopped() {
   } catch (error) {
     if (error instanceof Error && error.message.includes("still running")) throw error;
   }
+}
+
+function safeManagedDirectory(value: string, backupDir: string) {
+  const target = resolve(value);
+  const workspace = resolve(".");
+  const root = parse(target).root;
+  const targetContainsWorkspace = !relative(target, workspace).startsWith("..");
+  const targetContainsBackup = !relative(target, backupDir).startsWith("..");
+  if (target === root || target === workspace || targetContainsWorkspace || targetContainsBackup) {
+    throw new Error(`Refusing to clear unsafe managed storage path: ${target}`);
+  }
+  return target;
+}
+
+async function backupManagedDirectory(value: string, label: string, backupDir: string) {
+  const target = safeManagedDirectory(value, backupDir);
+  const destination = resolve(backupDir, label);
+  let backedUp = false;
+  try {
+    await cp(target, destination, { recursive: true, errorOnExist: true });
+    backedUp = true;
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+  }
+  return { path: target, backedUp };
+}
+
+async function clearManagedDirectory(target: string) {
+  await rm(target, { recursive: true, force: true });
+  await mkdir(target, { recursive: true });
 }
 
 async function main() {
@@ -62,6 +92,10 @@ async function main() {
   const archive = await directClient.dumpDataDir("gzip");
   const bytes = Buffer.from(await archive.arrayBuffer());
   await writeFile(resolve(backupDir, "pglite-backup.tar.gz"), bytes);
+  const managedStorage = {
+    uploads: await backupManagedDirectory(process.env.UPLOADS_DIR ?? "./uploads", "uploads", backupDir),
+    imports: await backupManagedDirectory(process.env.IMPORT_STORAGE_DIR ?? "./data/imports", "imports", backupDir),
+  };
   const manifest = {
     createdAt: new Date().toISOString(),
     dataMode: "real",
@@ -69,6 +103,7 @@ async function main() {
     retainedOwner: owner.email,
     sha256: createHash("sha256").update(bytes).digest("hex"),
     counts,
+    managedStorage,
   };
   await writeFile(resolve(backupDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
@@ -83,6 +118,7 @@ async function main() {
     await directClient.exec("ROLLBACK");
     throw error;
   }
+  await Promise.all([clearManagedDirectory(managedStorage.uploads.path), clearManagedDirectory(managedStorage.imports.path)]);
 
   const remaining = Object.fromEntries(await Promise.all(businessTables.map(async (table) => {
     const [row] = await directQuery<{ count: number }>(`SELECT count(*)::int AS count FROM ${table}`);

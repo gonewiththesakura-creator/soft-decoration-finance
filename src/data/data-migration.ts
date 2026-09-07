@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
-import { extname, resolve } from "node:path";
+import { basename, extname, resolve } from "node:path";
 import * as XLSX from "xlsx";
 import { runTransaction, sqlQuery, type TransactionStatement } from "@/db/client";
 import type { SessionUser } from "@/lib/auth";
@@ -12,6 +12,15 @@ import {
   validateMigrationRow, type MigrationIssue, type ReferenceEntity,
 } from "./data-migration-rules";
 import { buildBusinessFacts, parseWorkbook, sourceGroupKey, type FingerprintStatus } from "./import-pilot";
+
+export type ImportSourceChannel = "UPLOAD_UI" | "FOLDER" | "EXTERNAL_API";
+
+export function sanitizeImportFilename(filename: string) {
+  const base = basename(filename.replaceAll("\\", "/")).normalize("NFKC");
+  const extension = extname(base).toLowerCase();
+  const stem = base.slice(0, Math.max(0, base.length - extension.length)).replace(/[^\p{L}\p{N}._-]+/gu, "_").replace(/^\.+|\.+$/g, "").slice(0, 160);
+  return `${stem || "import"}${extension}`;
+}
 
 type Candidate = { id: number; companyId: number | null; name: string; code: string; aliases: string[] };
 export type ResolutionStatus = "EXACT_MATCH" | "POSSIBLE_MATCH" | "NOT_FOUND" | "MULTIPLE_MATCHES";
@@ -91,31 +100,33 @@ async function nextBatchNumber() {
   return `IMP-${day}-${String(Number(row.count) + 1).padStart(4, "0")}`;
 }
 
-export async function createMigrationWorkbook(file: File, user: SessionUser, options: { channel?: "UPLOAD" | "FOLDER"; sourcePath?: string; modifiedAt?: Date } = {}) {
+export async function createMigrationWorkbook(file: File, user: SessionUser, options: { channel?: ImportSourceChannel; sourcePath?: string; modifiedAt?: Date } = {}) {
   assertCan(user, "imports", "write");
-  if (!/\.(xlsx|xls|csv)$/i.test(file.name)) throw new Error("仅支持 .xlsx / .xls / .csv 文件");
+  const filename = sanitizeImportFilename(file.name);
+  if (!/\.(xlsx|xls|csv)$/i.test(filename)) throw new Error("仅支持 .xlsx / .xls / .csv 文件");
+  if (!file.size) throw new Error("迁移文件不能为空");
   if (file.size > 30 * 1024 * 1024) throw new Error("历史迁移文件不能超过 30MB");
   const bytes = Buffer.from(await file.arrayBuffer()); const fileHash = createHash("sha256").update(bytes).digest("hex");
-  const sheets = parseWorkbook(bytes, file.name).map((sheet) => ({ ...sheet, signature: sheetSignature(sheet.headers) }));
+  const sheets = parseWorkbook(bytes, filename).map((sheet) => ({ ...sheet, signature: sheetSignature(sheet.headers) }));
   const facts = buildBusinessFacts(sheets);
   const batchNumber = await nextBatchNumber();
-  const groupKey = sourceGroupKey(file.name) || fileHash;
-  const [sourceGroup] = await sqlQuery<{ id: number }>(`INSERT INTO import_source_groups(group_key,project_hint) VALUES($1,$2) ON CONFLICT(group_key) DO UPDATE SET last_seen_at=now() RETURNING id`, [groupKey, file.name.replace(/\.(xlsx|xls|csv)$/i, "")]);
-  const [pathMatch] = options.sourcePath ? await sqlQuery<{ fileHash: string; batchNumber: string; versionNumber: number }>(`SELECT f.file_hash AS "fileHash",b.batch_number AS "batchNumber",f.version_number AS "versionNumber" FROM import_files f JOIN import_batches b ON b.id=f.batch_id WHERE lower(f.source_path)=lower($1) ORDER BY f.created_at DESC LIMIT 1`, [options.sourcePath]) : [];
-  const [hashMatch] = await sqlQuery<{ batchNumber: string; versionNumber: number }>(`SELECT b.batch_number AS "batchNumber",f.version_number AS "versionNumber" FROM import_files f JOIN import_batches b ON b.id=f.batch_id WHERE f.file_hash=$1 ORDER BY f.created_at DESC LIMIT 1`, [fileHash]);
+  const groupKey = sourceGroupKey(filename) || fileHash;
+  const [sourceGroup] = await sqlQuery<{ id: number }>(`INSERT INTO import_source_groups(group_key,project_hint) VALUES($1,$2) ON CONFLICT(group_key) DO UPDATE SET last_seen_at=now() RETURNING id`, [groupKey, filename.replace(/\.(xlsx|xls|csv)$/i, "")]);
+  const [pathMatch] = options.sourcePath ? await sqlQuery<{ batchId: number; fileHash: string; batchNumber: string; versionNumber: number }>(`SELECT b.id AS "batchId",f.file_hash AS "fileHash",b.batch_number AS "batchNumber",f.version_number AS "versionNumber" FROM import_files f JOIN import_batches b ON b.id=f.batch_id WHERE lower(f.source_path)=lower($1) ORDER BY f.created_at DESC LIMIT 1`, [options.sourcePath]) : [];
+  const [hashMatch] = await sqlQuery<{ batchId: number; batchNumber: string; versionNumber: number }>(`SELECT b.id AS "batchId",b.batch_number AS "batchNumber",f.version_number AS "versionNumber" FROM import_files f JOIN import_batches b ON b.id=f.batch_id WHERE f.file_hash=$1 ORDER BY f.created_at DESC LIMIT 1`, [fileHash]);
   const fingerprintStatus: FingerprintStatus = pathMatch?.fileHash === fileHash ? "UNCHANGED" : hashMatch ? "DUPLICATE" : pathMatch ? "UPDATED" : "NEW";
   const [version] = await sqlQuery<{ versionNumber: number }>(`SELECT COALESCE(max(version_number),0)::int AS "versionNumber" FROM import_files WHERE source_group_id=$1`, [sourceGroup.id]);
   const versionNumber = fingerprintStatus === "UNCHANGED" || fingerprintStatus === "DUPLICATE" ? Number(pathMatch?.versionNumber ?? hashMatch?.versionNumber ?? 1) : Number(version.versionNumber) + 1;
   const isCurrent = fingerprintStatus === "NEW" || fingerprintStatus === "UPDATED";
-  const safeFilename = file.name.replace(/[^\p{L}\p{N}._-]+/gu, "_");
-  const storageKey = `${batchNumber}/${safeFilename}`;
+  const storageKey = `${batchNumber}/${filename}`;
   const storagePath = resolve(process.env.IMPORT_STORAGE_DIR ?? "./data/imports", storageKey);
   await mkdir(resolve(storagePath, ".."), { recursive: true });
   await writeFile(storagePath, bytes, { flag: "wx" });
-  const workbookStructure = { filename: file.name, sheetCount: sheets.length, sheets: sheets.map((sheet) => ({ name: sheet.name, rows: sheet.rowCount, columns: sheet.columnCount, headerRow: sheet.headerRow, classification: sheet.classification })) };
+  const sourceChannel = options.channel ?? "UPLOAD_UI";
+  const workbookStructure = { filename, sheetCount: sheets.length, sheets: sheets.map((sheet) => ({ name: sheet.name, rows: sheet.rowCount, columns: sheet.columnCount, headerRow: sheet.headerRow, classification: sheet.classification })) };
   const statements: TransactionStatement[] = [
-    { query: `INSERT INTO import_batches(batch_number,company_id,user_id,source_hash,status) VALUES($1,$2,$3,$4,'UPLOADED') RETURNING id`, params: [batchNumber, user.companyId, user.id, fileHash] },
-    { query: `INSERT INTO import_files(batch_id,source_group_id,filename,source_path,extension,file_size,file_hash,modified_at,workbook_structure,fingerprint_status,managed_storage_key,version_number,is_current,channel,sheet_count) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15) RETURNING id`, params: [{ fromResult: 0, key: "id" }, sourceGroup.id, file.name, options.sourcePath ?? null, extname(file.name).toLowerCase(), file.size, fileHash, options.modifiedAt ?? null, JSON.stringify(workbookStructure), fingerprintStatus, storageKey, versionNumber, isCurrent, options.channel ?? "UPLOAD", sheets.length] },
+    { query: `INSERT INTO import_batches(batch_number,company_id,user_id,source_hash,source_channel,status) VALUES($1,$2,$3,$4,$5,'UPLOADED') RETURNING id`, params: [batchNumber, user.companyId, user.id, fileHash, sourceChannel] },
+    { query: `INSERT INTO import_files(batch_id,source_group_id,filename,source_path,extension,file_size,file_hash,modified_at,workbook_structure,fingerprint_status,managed_storage_key,version_number,is_current,channel,sheet_count) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15) RETURNING id`, params: [{ fromResult: 0, key: "id" }, sourceGroup.id, filename, options.sourcePath ?? null, extname(filename).toLowerCase(), file.size, fileHash, options.modifiedAt ?? null, JSON.stringify(workbookStructure), fingerprintStatus, storageKey, versionNumber, isCurrent, sourceChannel, sheets.length] },
   ];
   for (const sheet of sheets) statements.push({ query: `INSERT INTO import_sheets(batch_id,file_id,sheet_index,name,row_count,column_count,headers,preview_rows,raw_rows,classification,classification_confidence,classification_warnings,is_empty,structure) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10,$11,$12::jsonb,$13,$14::jsonb) RETURNING id`, params: [{ fromResult: 0, key: "id" }, { fromResult: 1, key: "id" }, sheet.index, sheet.name, sheet.rowCount, sheet.columnCount, JSON.stringify(sheet.headers), JSON.stringify(sheet.previewRows), JSON.stringify(sheet.rows), sheet.classification, sheet.classificationConfidence, JSON.stringify(sheet.classificationWarnings), sheet.isEmpty, JSON.stringify({ headerRow: sheet.headerRow, signature: sheet.signature })] });
   for (const fact of facts) {
@@ -131,8 +142,8 @@ export async function createMigrationWorkbook(file: File, user: SessionUser, opt
   const templates = await sqlQuery<{ id: number; name: string; businessType: string; signature: string; mappings: Record<string, string> }>(`SELECT id,name,business_type AS "businessType",sheet_signature AS signature,field_mappings AS mappings FROM import_mapping_templates WHERE company_id IS NULL OR company_id=$1`, [user.companyId]);
   const learnedAliases = await sqlQuery<{ businessType: string; sourceField: string; targetField: string }>(`SELECT business_type AS "businessType",source_field AS "sourceField",target_field AS "targetField" FROM field_aliases WHERE company_id IS NULL OR company_id=$1 ORDER BY created_at DESC`, [user.companyId]);
   return {
-    batchId, batchNumber, filename: file.name, fileSize: file.size, sheetCount: sheets.length,
-    fingerprintStatus, versionNumber, sourceGroupKey: groupKey, duplicateOf: (pathMatch ?? hashMatch)?.batchNumber ?? null,
+    batchId, batchNumber, filename, fileSize: file.size, sheetCount: sheets.length, sourceChannel,
+    fingerprintStatus, versionNumber, sourceGroupKey: groupKey, duplicateOf: (pathMatch ?? hashMatch)?.batchNumber ?? null, duplicateOfBatchId: (pathMatch ?? hashMatch)?.batchId ?? null,
     sheets: sheets.map((sheet, index) => ({ id: Number(results[index + 2][0].id), name: sheet.name, rowCount: sheet.rowCount, columnCount: sheet.columnCount, headers: sheet.headers, previewRows: sheet.previewRows, classification: sheet.classification, classificationConfidence: sheet.classificationConfidence, classificationWarnings: sheet.classificationWarnings, learnedMappings: Object.fromEntries(migrationDefinitionsForAliases(learnedAliases, sheet.headers)), matchedTemplate: templates.find((template) => template.signature === sheet.signature) ?? null })),
   };
 }
@@ -238,7 +249,7 @@ export async function stageMigrationBatch(input: { batchId: number; sheetId: num
 
 export async function getMigrationOverview(user: SessionUser) {
   assertCan(user, "imports"); const scope = user.role === "owner" ? { sql: "TRUE", params: [] as unknown[] } : { sql: "b.company_id=$1", params: [user.companyId] as unknown[] };
-  const batches = await sqlQuery<Record<string, unknown>>(`SELECT b.id,b.batch_number AS "batchNumber",b.business_type AS "businessType",b.source_hash AS "sourceHash",b.status,b.total_rows AS "totalRows",b.ready_rows AS "readyRows",b.warning_rows AS "warningRows",b.error_rows AS "errorRows",b.success_rows AS "successRows",b.skipped_rows AS "skippedRows",b.created_at AS "createdAt",f.filename,s.name AS "sheetName",m.name AS "mappingName",u.name AS "userName" FROM import_batches b LEFT JOIN import_files f ON f.batch_id=b.id LEFT JOIN import_sheets s ON s.batch_id=b.id AND s.selected LEFT JOIN import_mapping_templates m ON m.id=b.mapping_template_id JOIN users u ON u.id=b.user_id WHERE ${scope.sql} ORDER BY b.created_at DESC LIMIT 30`, scope.params);
+  const batches = await sqlQuery<Record<string, unknown>>(`SELECT b.id,b.batch_number AS "batchNumber",b.business_type AS "businessType",b.source_hash AS "sourceHash",b.source_channel AS "sourceChannel",b.status,b.total_rows AS "totalRows",b.ready_rows AS "readyRows",b.warning_rows AS "warningRows",b.error_rows AS "errorRows",b.success_rows AS "successRows",b.skipped_rows AS "skippedRows",b.created_at AS "createdAt",f.filename,s.name AS "sheetName",m.name AS "mappingName",u.name AS "userName" FROM import_batches b LEFT JOIN import_files f ON f.batch_id=b.id LEFT JOIN import_sheets s ON s.batch_id=b.id AND s.selected LEFT JOIN import_mapping_templates m ON m.id=b.mapping_template_id JOIN users u ON u.id=b.user_id WHERE ${scope.sql} ORDER BY b.created_at DESC LIMIT 30`, scope.params);
   const [summary] = await sqlQuery<Record<string, unknown>>(`SELECT (SELECT count(*)::int FROM projects) AS projects,(SELECT count(*)::int FROM suppliers) AS suppliers,(SELECT count(*)::int FROM skus) AS skus,(SELECT count(*)::int FROM purchase_orders) AS purchases,(SELECT count(*)::int FROM payments WHERE NOT is_void) AS payments`);
   return { batches, summary };
 }

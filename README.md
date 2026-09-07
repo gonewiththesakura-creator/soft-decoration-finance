@@ -13,7 +13,7 @@
 - 收款登记、应收余额与账户余额联动
 - 项目经营总账、质保金独立状态、预算版本、退货冲减及操作日志
 - V1.5 老板经营驾驶舱：现金流预测、行动中心、项目健康度、资金结构、账龄与到期分析
-- V1.7 数据迁移中心：多文件上传、受限文件夹扫描、SHA-256 指纹与版本、Sheet 分类、字段 Mapping、暂存预检、证据血缘和安全撤销
+- V1.7.1 数据迁移中心：网页上传、受限文件夹扫描与 Bearer Token 外部文件 API 共享 SHA-256、Sheet 分类、暂存预检、证据血缘和安全撤销管线
 - Real AI Core：OpenAI-compatible Provider、24 个只读业务工具、多轮对话、全局 Copilot、页面上下文分析、数字溯源、限流与完整运行审计
 
 ## 技术架构
@@ -42,6 +42,8 @@ npm run dev
 打开 [http://localhost:3000](http://localhost:3000)。`npm run dev` 会同时启动唯一数据库服务和 Next.js，不要单独执行 `next dev`。
 
 `DATA_MODE` 默认是 `real`。真实模式首次启动只创建老板管理员，不创建公司、项目、账户或财务记录。生产空库必须在 `.env.local` 设置 `BOOTSTRAP_OWNER_NAME`、`BOOTSTRAP_OWNER_EMAIL` 和强密码 `BOOTSTRAP_OWNER_PASSWORD`。
+
+外部真实文件提交还必须在 `.env.local` 设置至少 32 字节的 `REAL_DATA_INGEST_TOKEN`。接口只在 `DATA_MODE=real` 时可用，详见 V1.7.1 外部真实数据提交接口文档。
 
 如需在隔离环境查看演示数据，必须显式切换模式：
 
@@ -116,6 +118,7 @@ docs/                    权限、测试、部署与版本状态
 - [Windows 运行稳定性](docs/RUNTIME-STABILITY.md)
 - [数据迁移中心](docs/DATA-MIGRATION.md)
 - [V1.7 真实数据试点](docs/V1.7-REAL-DATA-PILOT.md)
+- [V1.7.1 外部真实数据提交接口](docs/V1.7.1-EXTERNAL-REAL-DATA-INGEST.md)
 - [AI 架构](docs/AI-ARCHITECTURE.md)
 - [AI Provider 兼容性](docs/AI-PROVIDER-COMPATIBILITY.md)
 - [AI 工具清单](docs/AI-TOOLS.md)

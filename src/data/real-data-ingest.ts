@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { sqlQuery } from "@/db/client";
 import type { SessionUser } from "@/lib/auth";
 import { RealDataIngestError } from "@/lib/real-data-ingest";
-import { createMigrationWorkbook, sanitizeImportFilename } from "./data-migration";
+import { createMigrationWorkbook, resolveProjectForImport, sanitizeImportFilename } from "./data-migration";
+import type { ImportScope } from "./import-intelligence";
 import { parseWorkbook } from "./import-pilot";
 
 type StoredResponse = { payload: Record<string, unknown>; status: number };
@@ -45,7 +46,7 @@ async function writeIngestAudit(input: { requestId: number; batchId?: number | n
   await sqlQuery(`INSERT INTO real_data_ingest_audit(request_id,batch_id,remote_ip,filename,file_size,sha256,result,idempotency_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [input.requestId, input.batchId ?? null, input.remoteIp, input.filename, input.fileSize, input.sha256 ?? null, input.result, input.idempotencyKey]);
 }
 
-export async function ingestExternalFiles(files: File[], input: { idempotencyKey: string | null; remoteIp: string; totalBytes: number }): Promise<StoredResponse> {
+export async function ingestExternalFiles(files: File[], input: { idempotencyKey: string | null; remoteIp: string; totalBytes: number; scope?: ImportScope; projectId?: number | null; projectName?: string; projectCode?: string; createProject?: boolean; companyId?: number | null }): Promise<StoredResponse> {
   const started = await beginSubmission({ ...input, fileCount: files.length });
   if (typeof started !== "number") return started;
   const requestId = started;
@@ -70,10 +71,20 @@ export async function ingestExternalFiles(files: File[], input: { idempotencyKey
   }
 
   const owner = await externalOwner();
+  let project: Awaited<ReturnType<typeof resolveProjectForImport>> | null = null;
+  if (input.scope === "PROJECT") {
+    try { project = await resolveProjectForImport(input, owner); }
+    catch (error) {
+      const code = error instanceof Error ? error.message : "PROJECT_CONTEXT_REQUIRED";
+      const payload = { ok: false, error: code, message: code === "PROJECT_NOT_FOUND" ? "目标项目不存在，请传入有效 projectId，或使用 projectName + createProject=true" : "项目数据必须提供 projectId 或 projectName" };
+      await completeSubmission(requestId, "FAILED", 400, payload);
+      return { payload, status: 400 };
+    }
+  }
   const batches: Record<string, unknown>[] = [];
   try {
     for (const item of prepared) {
-      const workbook = await createMigrationWorkbook(item.file, owner, { channel: "EXTERNAL_API" });
+      const workbook = await createMigrationWorkbook(item.file, owner, { channel: "EXTERNAL_API", scope: input.scope ?? "PENDING", projectId: project?.id ?? null, companyId: project?.companyId ?? input.companyId ?? null });
       const fingerprintStatus = ["DUPLICATE", "UNCHANGED"].includes(workbook.fingerprintStatus) ? "UNCHANGED" : workbook.fingerprintStatus;
       batches.push({
         batchId: workbook.batchId,
@@ -84,8 +95,13 @@ export async function ingestExternalFiles(files: File[], input: { idempotencyKey
         duplicateOfBatchId: workbook.duplicateOfBatchId,
         versionNumber: workbook.versionNumber,
         sheetCount: workbook.sheetCount,
+        scope: workbook.scope,
+        projectId: workbook.projectId,
+        projectName: project?.name ?? null,
+        projectConflict: workbook.projectConflict,
+        analysis: workbook.analysis,
         sheets: workbook.sheets.map((sheet) => ({ name: sheet.name, classification: sheet.classification, rowCount: sheet.rowCount, confidence: Math.round(sheet.classificationConfidence / 100) })),
-        status: "UPLOADED",
+        status: workbook.projectConflict ? "PROJECT_CONFLICT" : "UPLOADED",
         next: "REVIEW_IN_IMPORT_CENTER",
       });
       await writeIngestAudit({ requestId, batchId: workbook.batchId, remoteIp: input.remoteIp, filename: workbook.filename, fileSize: item.file.size, sha256: item.sha256, result: "STAGED", idempotencyKey: input.idempotencyKey });
@@ -98,7 +114,7 @@ export async function ingestExternalFiles(files: File[], input: { idempotencyKey
     return { payload, status: 400 };
   }
 
-  const payload = { ok: true, dataMode: "real", received: files.length, batches };
+  const payload = { ok: true, dataMode: "real", scope: input.scope ?? "PENDING", project: project ? { id: project.id, name: project.name, code: project.code, created: project.created } : null, received: files.length, batches };
   await completeSubmission(requestId, "COMPLETED", 200, payload);
   return { payload, status: 200 };
 }
@@ -129,16 +145,18 @@ export async function getRealDataIngestStatus() {
 }
 
 export async function getExternalIngestBatch(batchId: number) {
-  const [batch] = await sqlQuery<Record<string, unknown>>(`SELECT b.id,b.batch_number AS "batchNumber",b.status,b.source_channel AS "sourceChannel",b.business_type AS "businessType",b.mapping_template_id AS "mappingTemplateId",b.total_rows AS "totalRows",b.ready_rows AS "readyRows",b.warning_rows AS "warningRows",b.error_rows AS "errorRows",b.success_rows AS "successRows",b.skipped_rows AS "skippedRows",b.created_at AS "createdAt",b.completed_at AS "completedAt",f.filename,f.file_hash AS "sha256",f.fingerprint_status AS "fingerprintStatus",f.version_number AS "versionNumber" FROM import_batches b JOIN import_files f ON f.batch_id=b.id WHERE b.id=$1 AND b.source_channel='EXTERNAL_API'`, [batchId]);
+  const [batch] = await sqlQuery<Record<string, unknown>>(`SELECT b.id,b.batch_number AS "batchNumber",b.status,b.source_channel AS "sourceChannel",b.scope_type AS scope,b.project_id AS "projectId",p.name AS "projectName",b.context_confirmed AS "contextConfirmed",b.project_candidate AS "projectCandidate",b.project_conflict AS "projectConflict",b.analysis_summary AS analysis,b.business_type AS "businessType",b.mapping_template_id AS "mappingTemplateId",b.total_rows AS "totalRows",b.ready_rows AS "readyRows",b.warning_rows AS "warningRows",b.error_rows AS "errorRows",b.success_rows AS "successRows",b.skipped_rows AS "skippedRows",b.created_at AS "createdAt",b.completed_at AS "completedAt",f.filename,f.file_hash AS "sha256",f.fingerprint_status AS "fingerprintStatus",f.version_number AS "versionNumber" FROM import_batches b JOIN import_files f ON f.batch_id=b.id LEFT JOIN projects p ON p.id=b.project_id WHERE b.id=$1 AND b.source_channel='EXTERNAL_API'`, [batchId]);
   if (!batch) throw new RealDataIngestError("BATCH_NOT_FOUND", 404, "外部导入批次不存在");
-  const sheets = await sqlQuery<Record<string, unknown>>(`SELECT name,classification,row_count AS "rowCount",classification_confidence AS "classificationConfidence",selected FROM import_sheets WHERE batch_id=$1 ORDER BY sheet_index`, [batchId]);
+  const sheets = await sqlQuery<Record<string, unknown>>(`SELECT name,classification,row_count AS "rowCount",classification_confidence AS "classificationConfidence",recognized_facts AS "recognizedFacts",analysis_confidence AS "analysisConfidence",selected FROM import_sheets WHERE batch_id=$1 ORDER BY sheet_index`, [batchId]);
+  const facts = await sqlQuery<Record<string, unknown>>(`SELECT id,fact_type AS "factType",confidence,confidence_level AS "confidenceLevel",status FROM import_business_facts WHERE batch_id=$1 AND fact_type<>'COST_ITEM' ORDER BY confidence DESC,id LIMIT 100`, [batchId]);
   return {
     ok: true,
     batch: {
       ...batch,
       imported: batch.status === "COMPLETED",
       stagingStatus: batch.status,
-      sheets: sheets.map((sheet) => ({ name: sheet.name, classification: sheet.classification, rowCount: Number(sheet.rowCount), confidence: Math.round(Number(sheet.classificationConfidence) / 100), selected: Boolean(sheet.selected) })),
+      facts,
+      sheets: sheets.map((sheet) => ({ name: sheet.name, classification: sheet.classification, rowCount: Number(sheet.rowCount), confidence: Math.round(Number(sheet.analysisConfidence ?? sheet.classificationConfidence) / 100), recognizedFacts: sheet.recognizedFacts, selected: Boolean(sheet.selected) })),
     },
   };
 }

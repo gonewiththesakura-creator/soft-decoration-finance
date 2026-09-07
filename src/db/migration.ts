@@ -413,4 +413,52 @@ END
 $migration$;
 `;
 
-export const INITIAL_MIGRATION = BASE_SCHEMA + FINANCIAL_NUMERIC_MIGRATION + BUSINESS_ATTACHMENT_MIGRATION + AUTH_SECURITY_MIGRATION + IMPORT_SAFETY_MIGRATION + INVOICE_ALLOCATION_MIGRATION + ATTACHMENT_SYSTEM_MIGRATION + DATA_MIGRATION_CENTER_MIGRATION + IMPORT_SCOPE_MIGRATION + AI_CORE_MIGRATION + AI_HARDENING_MIGRATION + REAL_DATA_PILOT_MIGRATION + EXTERNAL_INGEST_API_MIGRATION;
+export const PROJECT_SCOPED_INTELLIGENT_IMPORT_MIGRATION = String.raw`
+DO $migration$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = '0013_project_scoped_intelligent_import') THEN
+    ALTER TABLE projects ALTER COLUMN company_id DROP NOT NULL;
+    ALTER TABLE projects ALTER COLUMN customer_id DROP NOT NULL;
+
+    ALTER TABLE import_batches ADD COLUMN scope_type text NOT NULL DEFAULT 'PENDING';
+    ALTER TABLE import_batches ADD COLUMN project_id integer REFERENCES projects(id);
+    ALTER TABLE import_batches ADD COLUMN context_confirmed boolean NOT NULL DEFAULT false;
+    ALTER TABLE import_batches ADD COLUMN project_candidate text;
+    ALTER TABLE import_batches ADD COLUMN project_conflict jsonb;
+    ALTER TABLE import_batches ADD COLUMN analysis_summary jsonb NOT NULL DEFAULT '{}'::jsonb;
+    CREATE INDEX import_batches_project_idx ON import_batches(project_id, created_at DESC);
+
+    ALTER TABLE import_files ADD COLUMN project_id integer REFERENCES projects(id);
+    CREATE INDEX import_files_project_idx ON import_files(project_id, created_at DESC);
+
+    ALTER TABLE import_sheets ADD COLUMN project_id integer REFERENCES projects(id);
+    ALTER TABLE import_sheets ADD COLUMN recognized_facts jsonb NOT NULL DEFAULT '[]'::jsonb;
+    ALTER TABLE import_sheets ADD COLUMN analysis_confidence integer NOT NULL DEFAULT 0;
+    CREATE INDEX import_sheets_project_idx ON import_sheets(project_id, created_at DESC);
+
+    ALTER TABLE import_staging_rows ADD COLUMN project_id integer REFERENCES projects(id);
+    ALTER TABLE import_staging_rows ADD COLUMN business_type text;
+    ALTER TABLE import_staging_rows DROP CONSTRAINT IF EXISTS import_staging_rows_batch_id_sheet_id_source_row_key;
+    DROP INDEX IF EXISTS import_staging_batch_row_idx;
+    CREATE UNIQUE INDEX import_staging_batch_fact_row_idx ON import_staging_rows(batch_id, sheet_id, source_row, COALESCE(business_type, 'MANUAL'));
+    CREATE INDEX import_staging_project_idx ON import_staging_rows(project_id, status);
+
+    ALTER TABLE import_business_facts ADD COLUMN project_id integer REFERENCES projects(id);
+    ALTER TABLE import_business_facts ADD COLUMN company_id integer REFERENCES companies(id);
+    ALTER TABLE import_business_facts ADD COLUMN confidence integer NOT NULL DEFAULT 0;
+    ALTER TABLE import_business_facts ADD COLUMN confidence_level text NOT NULL DEFAULT 'LOW';
+    ALTER TABLE import_business_facts ADD COLUMN status text NOT NULL DEFAULT 'SUGGESTED';
+    CREATE INDEX import_business_facts_project_idx ON import_business_facts(project_id, fact_type, business_key);
+
+    ALTER TABLE import_business_fact_evidence ADD COLUMN project_id integer REFERENCES projects(id);
+
+    ALTER TABLE import_data_lineage ADD COLUMN project_id integer REFERENCES projects(id);
+    CREATE INDEX import_lineage_project_idx ON import_data_lineage(project_id, created_at DESC);
+
+    INSERT INTO schema_migrations(version) VALUES ('0013_project_scoped_intelligent_import');
+  END IF;
+END
+$migration$;
+`;
+
+export const INITIAL_MIGRATION = BASE_SCHEMA + FINANCIAL_NUMERIC_MIGRATION + BUSINESS_ATTACHMENT_MIGRATION + AUTH_SECURITY_MIGRATION + IMPORT_SAFETY_MIGRATION + INVOICE_ALLOCATION_MIGRATION + ATTACHMENT_SYSTEM_MIGRATION + DATA_MIGRATION_CENTER_MIGRATION + IMPORT_SCOPE_MIGRATION + AI_CORE_MIGRATION + AI_HARDENING_MIGRATION + REAL_DATA_PILOT_MIGRATION + EXTERNAL_INGEST_API_MIGRATION + PROJECT_SCOPED_INTELLIGENT_IMPORT_MIGRATION;

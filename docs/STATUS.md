@@ -1,6 +1,18 @@
 # Version Status
 
-## Current: V1.7.1
+## Current: V1.7.2
+
+- Import starts with Project, Company or Master Data scope instead of a required business type.
+- Project imports require a confirmed existing or newly created project before staging; project conflicts block progress unless a user explicitly overrides them.
+- Filename, folder, workbook title, Sheet names and headers feed a deterministic analyzer that can recognize multiple business facts per Sheet and classify confidence as HIGH, MEDIUM or LOW.
+- Project context now propagates through batches, files, Sheets, facts, evidence, staging rows and lineage, with project-scoped duplicate keys and formal import isolation checks.
+- Project workspaces expose original source files and import history. Existing field Mapping remains available as an advanced fallback.
+- The external ingest API accepts project context and rejects ambiguous project uploads with `PROJECT_CONTEXT_REQUIRED`.
+- QA covers 10 isolated real-mode API tests and 65 unit/integration/AI tests. A real workbook still requires user reconciliation before acceptance.
+
+See `docs/V1.7.2-PROJECT-SCOPED-INTELLIGENT-IMPORT.md` for the data model, confidence rules, conflict protection and pilot workflow.
+
+## Previous: V1.7.1
 
 - The local Demo database reset is explicitly authorized and now backs up PGlite, attachments and managed import originals before clearing all business, import, audit and AI-run data.
 - `POST /api/real-data/ingest/files` accepts token-authenticated XLSX, XLS and CSV submissions only in real mode and stops at `UPLOADED` staging.

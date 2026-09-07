@@ -6,6 +6,7 @@ import type { SessionUser } from "@/lib/auth";
 import { IMPORT_MAX_FILE_BYTES, IMPORT_MAX_FILE_MB } from "@/lib/import-limits";
 import { assertCan } from "@/lib/permissions";
 import { isSupportedImportFile, type FingerprintStatus } from "./import-pilot";
+import { extractProjectCandidate } from "./import-intelligence";
 
 const maxFiles = 250;
 const maxFileBytes = IMPORT_MAX_FILE_BYTES;
@@ -58,6 +59,8 @@ type ScannedFile = {
   hash: string | null;
   status: FingerprintStatus;
   previousBatchNumber: string | null;
+  projectCandidate: string | null;
+  projectCandidateSource: "FOLDER" | "FILENAME" | null;
   error: string | null;
 };
 
@@ -89,12 +92,17 @@ export async function scanImportFolder(input: { folderPath: string; recursive?: 
   for (const pathname of paths) {
     const filename = pathname.slice(pathname.lastIndexOf(sep) + 1);
     const extension = extname(filename).toLowerCase();
+    const relativeParts = relative(folder, pathname).split(sep).filter(Boolean);
+    const folderCandidate = relativeParts.length > 1 ? extractProjectCandidate(relativeParts[0]) : null;
+    const filenameCandidate = extractProjectCandidate(filename);
+    const projectCandidate = folderCandidate ?? filenameCandidate;
+    const projectCandidateSource = folderCandidate ? "FOLDER" as const : filenameCandidate ? "FILENAME" as const : null;
     try {
       const info = await stat(pathname);
       totalBytes += info.size;
       if (totalBytes > maxTotalBytes) throw new Error("扫描文件总大小超过 500MB");
       if (!isSupportedImportFile(filename)) {
-        files.push({ path: pathname, filename, extension, size: info.size, modifiedAt: info.mtime.toISOString(), hash: null, status: "UNSUPPORTED", previousBatchNumber: null, error: null });
+        files.push({ path: pathname, filename, extension, size: info.size, modifiedAt: info.mtime.toISOString(), hash: null, status: "UNSUPPORTED", previousBatchNumber: null, projectCandidate, projectCandidateSource, error: null });
         continue;
       }
       if (info.size > maxFileBytes) throw new Error(`文件超过 ${IMPORT_MAX_FILE_MB}MB`);
@@ -103,12 +111,13 @@ export async function scanImportFolder(input: { folderPath: string; recursive?: 
       const previousPath = byPath.get(pathname.toLowerCase());
       const previousHash = byHash.get(hash);
       const status: FingerprintStatus = previousPath?.fileHash === hash ? "UNCHANGED" : previousHash ? "DUPLICATE" : previousPath ? "UPDATED" : "NEW";
-      files.push({ path: pathname, filename, extension, size: info.size, modifiedAt: info.mtime.toISOString(), hash, status, previousBatchNumber: (previousPath ?? previousHash)?.batchNumber ?? null, error: null });
+      files.push({ path: pathname, filename, extension, size: info.size, modifiedAt: info.mtime.toISOString(), hash, status, previousBatchNumber: (previousPath ?? previousHash)?.batchNumber ?? null, projectCandidate, projectCandidateSource, error: null });
     } catch (error) {
-      files.push({ path: pathname, filename, extension, size: 0, modifiedAt: "", hash: null, status: "ERROR", previousBatchNumber: null, error: error instanceof Error ? error.message : "读取失败" });
+      files.push({ path: pathname, filename, extension, size: 0, modifiedAt: "", hash: null, status: "ERROR", previousBatchNumber: null, projectCandidate, projectCandidateSource, error: error instanceof Error ? error.message : "读取失败" });
     }
   }
-  return { folder, recursive: Boolean(input.recursive), scannedAt: new Date().toISOString(), limits: { maxFiles, maxFileBytes, maxTotalBytes, scanTimeoutMs }, files };
+  const projectGroups = [...new Set(files.map((file) => file.projectCandidate).filter((value): value is string => Boolean(value)))].map((name) => ({ name, fileCount: files.filter((file) => file.projectCandidate === name).length, status: "REQUIRES_CONFIRMATION" }));
+  return { folder, recursive: Boolean(input.recursive), scannedAt: new Date().toISOString(), limits: { maxFiles, maxFileBytes, maxTotalBytes, scanTimeoutMs }, projectGroups, files };
 }
 
 export async function readAllowedImportFile(pathname: string, user: SessionUser) {

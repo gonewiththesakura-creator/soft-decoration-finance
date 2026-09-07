@@ -5,20 +5,22 @@ import { assertCan, type ResourceKey } from "./permissions";
 export type WorkflowType = "purchase" | "payment";
 
 export async function assertProjectAccess(user: SessionUser, projectId: number) {
-  const [project] = await sqlQuery<{ companyId: number }>(
+  const [project] = await sqlQuery<{ companyId: number | null }>(
     `SELECT company_id AS "companyId" FROM projects WHERE id=$1`,
     [projectId],
   );
   if (!project) throw new Error("项目不存在或无权查看");
   if (user.role === "owner") return;
-  if (user.companyId !== project.companyId) throw new Error("项目不存在或无权查看");
   if (user.role === "project_manager" || user.role === "designer") {
     const [membership] = await sqlQuery<{ allowed: boolean }>(
       `SELECT EXISTS(SELECT 1 FROM project_members WHERE project_id=$1 AND user_id=$2) AS allowed`,
       [projectId, user.id],
     );
     if (!membership?.allowed) throw new Error("项目不存在或无权查看");
+    if (project.companyId !== null && user.companyId !== project.companyId) throw new Error("项目不存在或无权查看");
+    return;
   }
+  if (project.companyId === null || user.companyId !== project.companyId) throw new Error("项目不存在或无权查看");
 }
 
 export async function assertWorkflowAccess(

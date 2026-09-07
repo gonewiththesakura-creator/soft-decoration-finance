@@ -86,8 +86,8 @@ export const suppliers = pgTable("suppliers", {
 
 export const projects = pgTable("projects", {
   id: serial("id").primaryKey(),
-  companyId: integer("company_id").notNull().references(() => companies.id),
-  customerId: integer("customer_id").notNull().references(() => customers.id),
+  companyId: integer("company_id").references(() => companies.id),
+  customerId: integer("customer_id").references(() => customers.id),
   code: text("code").notNull().unique(),
   name: text("name").notNull(),
   address: text("address"),
@@ -534,6 +534,12 @@ export const importBatches = pgTable("import_batches", {
   businessType: text("business_type"),
   sourceHash: text("source_hash").notNull(),
   sourceChannel: text("source_channel").notNull().default("UPLOAD_UI"),
+  scopeType: text("scope_type").notNull().default("PENDING"),
+  projectId: integer("project_id").references(() => projects.id),
+  contextConfirmed: boolean("context_confirmed").notNull().default(false),
+  projectCandidate: text("project_candidate"),
+  projectConflict: jsonb("project_conflict"),
+  analysisSummary: jsonb("analysis_summary").notNull().default({}),
   mappingTemplateId: integer("mapping_template_id").references(() => importMappingTemplates.id),
   totalRows: integer("total_rows").notNull().default(0),
   readyRows: integer("ready_rows").notNull().default(0),
@@ -562,6 +568,7 @@ export const importFiles = pgTable("import_files", {
   id: serial("id").primaryKey(),
   batchId: integer("batch_id").notNull().references(() => importBatches.id),
   sourceGroupId: integer("source_group_id").references(() => importSourceGroups.id),
+  projectId: integer("project_id").references(() => projects.id),
   filename: text("filename").notNull(),
   sourcePath: text("source_path"),
   extension: text("extension"),
@@ -610,6 +617,7 @@ export const importSheets = pgTable("import_sheets", {
   id: serial("id").primaryKey(),
   batchId: integer("batch_id").notNull().references(() => importBatches.id),
   fileId: integer("file_id").notNull().references(() => importFiles.id),
+  projectId: integer("project_id").references(() => projects.id),
   sheetIndex: integer("sheet_index").notNull(),
   name: text("name").notNull(),
   rowCount: integer("row_count").notNull(),
@@ -622,6 +630,8 @@ export const importSheets = pgTable("import_sheets", {
   classificationWarnings: jsonb("classification_warnings").notNull().default([]),
   isEmpty: boolean("is_empty").notNull().default(false),
   structure: jsonb("structure").notNull().default({}),
+  recognizedFacts: jsonb("recognized_facts").notNull().default([]),
+  analysisConfidence: integer("analysis_confidence").notNull().default(0),
   selected: boolean("selected").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [uniqueIndex("import_sheet_batch_index_idx").on(table.batchId, table.sheetIndex)]);
@@ -652,6 +662,8 @@ export const importStagingRows = pgTable("import_staging_rows", {
   id: serial("id").primaryKey(),
   batchId: integer("batch_id").notNull().references(() => importBatches.id),
   sheetId: integer("sheet_id").notNull().references(() => importSheets.id),
+  projectId: integer("project_id").references(() => projects.id),
+  businessType: text("business_type"),
   sourceRow: integer("source_row").notNull(),
   rawData: jsonb("raw_data").notNull(),
   normalizedData: jsonb("normalized_data").notNull(),
@@ -664,7 +676,7 @@ export const importStagingRows = pgTable("import_staging_rows", {
   targetId: integer("target_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-}, (table) => [uniqueIndex("import_staging_batch_row_idx").on(table.batchId, table.sheetId, table.sourceRow)]);
+}, (table) => [uniqueIndex("import_staging_batch_fact_row_idx").on(table.batchId, table.sheetId, table.sourceRow, table.businessType)]);
 
 export const importReferenceResolutions = pgTable("import_reference_resolutions", {
   id: serial("id").primaryKey(),
@@ -684,6 +696,7 @@ export const importDataLineage = pgTable("import_data_lineage", {
   id: serial("id").primaryKey(),
   batchId: integer("batch_id").notNull().references(() => importBatches.id),
   stagingRowId: integer("staging_row_id").notNull().references(() => importStagingRows.id),
+  projectId: integer("project_id").references(() => projects.id),
   targetTable: text("target_table").notNull(),
   targetId: integer("target_id").notNull(),
   sourceFileId: integer("source_file_id").references(() => importFiles.id),
@@ -702,9 +715,14 @@ export const importDataLineage = pgTable("import_data_lineage", {
 export const importBusinessFacts = pgTable("import_business_facts", {
   id: serial("id").primaryKey(),
   batchId: integer("batch_id").notNull().references(() => importBatches.id),
+  projectId: integer("project_id").references(() => projects.id),
+  companyId: integer("company_id").references(() => companies.id),
   factType: text("fact_type").notNull(),
   businessKey: text("business_key").notNull(),
   payload: jsonb("payload").notNull().default({}),
+  confidence: integer("confidence").notNull().default(0),
+  confidenceLevel: text("confidence_level").notNull().default("LOW"),
+  status: text("status").notNull().default("SUGGESTED"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [uniqueIndex("import_business_fact_batch_key_idx").on(table.batchId, table.factType, table.businessKey)]);
 
@@ -713,6 +731,7 @@ export const importBusinessFactEvidence = pgTable("import_business_fact_evidence
   factId: integer("fact_id").notNull().references(() => importBusinessFacts.id),
   fileId: integer("file_id").notNull().references(() => importFiles.id),
   sheetId: integer("sheet_id").notNull().references(() => importSheets.id),
+  projectId: integer("project_id").references(() => projects.id),
   sourceRow: integer("source_row").notNull(),
   sourceColumn: text("source_column"),
   sourceCell: text("source_cell"),

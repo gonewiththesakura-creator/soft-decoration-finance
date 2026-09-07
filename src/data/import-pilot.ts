@@ -22,6 +22,7 @@ export type ParsedSheet = {
   classificationConfidence: number;
   classificationWarnings: string[];
   isEmpty: boolean;
+  titleValues?: string[];
 };
 
 const supportedExtensions = new Set([".xlsx", ".xls", ".csv"]);
@@ -117,7 +118,7 @@ export function parseWorkbook(bytes: Buffer, filename: string): ParsedSheet[] {
   return book.SheetNames.map((name, index) => {
     const matrix = XLSX.utils.sheet_to_json<unknown[]>(book.Sheets[name], { header: 1, defval: "", raw: true, blankrows: false });
     const nonEmpty = matrix.filter((row) => row.some((value) => String(value ?? "").trim() !== ""));
-    if (!nonEmpty.length) return { index, name, headerRow: 0, rows: [], headers: [], rowCount: 0, columnCount: 0, previewRows: [], classification: "EMPTY", classificationConfidence: 10000, classificationWarnings: ["Sheet 没有可导入数据"], isEmpty: true };
+    if (!nonEmpty.length) return { index, name, headerRow: 0, rows: [], headers: [], rowCount: 0, columnCount: 0, previewRows: [], classification: "EMPTY", classificationConfidence: 10000, classificationWarnings: ["Sheet 没有可导入数据"], isEmpty: true, titleValues: [] };
     const headerIndex = detectHeaderRow(matrix);
     const headers = uniqueHeaders(matrix[headerIndex] ?? []);
     const rows = matrix.slice(headerIndex + 1).flatMap((values, rowIndex) => {
@@ -126,7 +127,8 @@ export function parseWorkbook(bytes: Buffer, filename: string): ParsedSheet[] {
     });
     if (rows.length > 10_000) throw new Error(`Sheet“${name}”超过 10,000 行，请拆分后迁移`);
     const classified = classifySheet(name, headers, rows.length);
-    return { index, name, headerRow: headerIndex + 1, rows, headers, rowCount: rows.length, columnCount: headers.length, previewRows: rows.slice(0, 50), classification: classified.classification, classificationConfidence: classified.confidence, classificationWarnings: classified.warnings, isEmpty: rows.length === 0 };
+    const titleValues = matrix.slice(0, headerIndex).flat().map((value) => String(value ?? "").trim()).filter(Boolean).slice(0, 20);
+    return { index, name, headerRow: headerIndex + 1, rows, headers, rowCount: rows.length, columnCount: headers.length, previewRows: rows.slice(0, 50), classification: classified.classification, classificationConfidence: classified.confidence, classificationWarnings: classified.warnings, isEmpty: rows.length === 0, titleValues };
   });
 }
 

@@ -129,7 +129,7 @@ async function seed() {
       });
     }
   });
-  const projectRows = await db.insert(projects).values(projectValues).returning();
+  const projectRows = (await db.insert(projects).values(projectValues).returning()).map((project) => ({ ...project, companyId: project.companyId! }));
 
   await db.insert(projectMembers).values(projectRows.flatMap((project) => {
     const assigned = userRows.filter((u) => u.id === project.managerId || u.id === project.designerId);

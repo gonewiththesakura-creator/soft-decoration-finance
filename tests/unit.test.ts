@@ -8,6 +8,8 @@ import { buildCashflowForecast, groupCashflowByWeek, projectedBalance } from "@/
 import { calculateProjectHealth } from "@/data/analytics/health";
 import * as XLSX from "xlsx";
 import { buildBusinessFacts, classifySheet, parseWorkbook, sourceGroupKey, type ParsedSheet } from "@/data/import-pilot";
+import { analyzeWorkbook, confidenceLevel, detectProjectConflict, extractProjectCandidate, recognizeSheetFacts, suggestIntelligentMappings } from "@/data/import-intelligence";
+import { duplicateRules } from "@/data/data-migration-rules";
 
 const finance: SessionUser = { id: 2, companyId: 1, name: "财务", email: "finance@test", role: "finance" };
 const designer: SessionUser = { id: 3, companyId: 1, name: "设计", email: "designer@test", role: "designer" };
@@ -110,6 +112,55 @@ describe("V1.7 real-data workbook rules", () => {
     expect(facts).toHaveLength(1);
     expect(facts[0].evidence).toHaveLength(2);
     expect(facts[0].evidence.map((item) => item.role).sort()).toEqual(["PRIMARY", "SUPPORTING"]);
+  });
+});
+
+describe("V1.7.2 project-scoped intelligent import", () => {
+  const projectSheet: ParsedSheet = {
+    index: 0,
+    name: "钢化玻璃采购",
+    headerRow: 1,
+    headers: ["供应商", "产品名称", "规格", "数量", "单价", "货款", "增值税", "合计", "付款条件"],
+    rows: [{ __sourceRow: 2, 供应商: "凯特斯雕塑", 产品名称: "玻璃台面", 规格: "1200x600", 数量: 2, 单价: 1800, 货款: 3600, 增值税: 468, 合计: 4068, 付款条件: "30%预付" }],
+    rowCount: 1,
+    columnCount: 9,
+    previewRows: [],
+    classification: "PURCHASE_ORDER",
+    classificationConfidence: 9100,
+    classificationWarnings: [],
+    isEmpty: false,
+  };
+
+  it("extracts and consolidates a project candidate from the filename and workbook title", () => {
+    expect(extractProjectCandidate("1.青岛鑫江中心成本表（2023-5-13更新）未完结.xlsx")).toBe("青岛鑫江中心");
+    const analysis = analyzeWorkbook("青岛鑫江中心采购.xlsx", [{ ...projectSheet, titleValues: ["青岛鑫江中心项目"] }]);
+    expect(analysis.scopeSuggestion).toBe("PROJECT");
+    expect(analysis.projectCandidate).toMatchObject({ name: "青岛鑫江中心项目", level: "HIGH" });
+    expect(analysis.projectCandidate?.sources).toEqual(expect.arrayContaining(["文件名", "Sheet“钢化玻璃采购”内容"]));
+  });
+
+  it("recognizes multiple business facts from one sheet", () => {
+    const factTypes = recognizeSheetFacts(projectSheet).map((fact) => fact.factType);
+    expect(factTypes).toEqual(expect.arrayContaining(["SKU", "SUPPLIER", "PURCHASE_ORDER_LINE", "PAYABLE", "TAX", "PAYMENT_TERMS"]));
+  });
+
+  it("auto-accepts exact mappings and flags fuzzy mappings for confirmation", () => {
+    const exact = suggestIntelligentMappings("contracts", ["合同金额"])[0];
+    const fuzzy = suggestIntelligentMappings("contracts", ["合同金额原值"])[0];
+    expect(exact).toMatchObject({ targetField: "amountYuan", confidence: 9800, level: "HIGH" });
+    expect(fuzzy).toMatchObject({ targetField: "amountYuan", confidence: 7600, level: "MEDIUM" });
+    expect(confidenceLevel(6900)).toBe("LOW");
+  });
+
+  it("blocks a strong conflicting project candidate", () => {
+    expect(detectProjectConflict("青岛鑫江中心", { name: "杭州万豪酒店", confidence: 9300, level: "HIGH", sources: ["文件名"] })).toMatchObject({ level: "CONFLICT" });
+    expect(detectProjectConflict("青岛鑫江中心项目", { name: "青岛鑫江中心", confidence: 9700, level: "HIGH", sources: ["内容"] })).toBeNull();
+  });
+
+  it("keeps supplier deduplication company-scoped while SKU keys remain project-scoped", () => {
+    expect(duplicateRules.suppliers).toMatchObject({ companyScoped: true });
+    expect(duplicateRules.suppliers).not.toHaveProperty("scopeField");
+    expect(duplicateRules.skus).toMatchObject({ scopeField: "projectId", scopeColumn: "project_id" });
   });
 });
 

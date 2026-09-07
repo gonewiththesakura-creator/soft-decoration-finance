@@ -4,6 +4,7 @@ import { basename, extname, resolve } from "node:path";
 import * as XLSX from "xlsx";
 import { runTransaction, sqlQuery, type TransactionStatement } from "@/db/client";
 import type { SessionUser } from "@/lib/auth";
+import { assertProjectAccess } from "@/lib/access";
 import { IMPORT_MAX_FILE_BYTES, IMPORT_MAX_FILE_MB } from "@/lib/import-limits";
 import { assertCan, type ResourceKey } from "@/lib/permissions";
 import { isRealDataMode } from "@/lib/data-mode";
@@ -13,6 +14,9 @@ import {
   validateMigrationRow, type MigrationIssue, type ReferenceEntity,
 } from "./data-migration-rules";
 import { buildBusinessFacts, parseWorkbook, sourceGroupKey, type FingerprintStatus } from "./import-pilot";
+import {
+  analyzeWorkbook, detectProjectConflict, projectNamesEquivalent, type ImportScope, type IntelligentWorkbookAnalysis,
+} from "./import-intelligence";
 
 export type ImportSourceChannel = "UPLOAD_UI" | "FOLDER" | "EXTERNAL_API";
 
@@ -50,14 +54,18 @@ function jsonValue<T>(value: unknown, fallback: T): T {
 function scopeAllowed(user: SessionUser, companyId: number | null) { return user.role === "owner" || (companyId !== null && companyId === user.companyId); }
 async function requireBatch(batchId: number, user: SessionUser) {
   const [batch] = await sqlQuery<Record<string, unknown>>(`SELECT * FROM import_batches WHERE id=$1`, [batchId]);
-  if (!batch || !scopeAllowed(user, batch.company_id === null ? null : Number(batch.company_id))) throw new Error("批次不存在或超出公司权限范围");
+  if (!batch) throw new Error("批次不存在或超出公司权限范围");
+  if (user.role !== "owner" && batch.project_id) {
+    try { await assertProjectAccess(user, Number(batch.project_id)); }
+    catch { throw new Error("批次不存在或超出公司权限范围"); }
+  } else if (!scopeAllowed(user, batch.company_id === null ? null : Number(batch.company_id))) throw new Error("批次不存在或超出公司权限范围");
   return batch;
 }
 
 async function loadCatalog(user: SessionUser) {
   const entries = await Promise.all(Object.entries(entityQueries).map(async ([entity, query]) => [entity, await sqlQuery<Omit<Candidate, "aliases">>(query)] as const));
   const aliases = await sqlQuery<{ entityType: ReferenceEntity; entityId: number; alias: string; companyId: number }>(`SELECT entity_type AS "entityType",entity_id AS "entityId",alias,company_id AS "companyId" FROM entity_aliases`);
-  return Object.fromEntries(entries.map(([entity, rows]) => [entity, rows.filter((row) => scopeAllowed(user, Number(row.companyId))).map((row) => ({ ...row, id: Number(row.id), companyId: Number(row.companyId), aliases: aliases.filter((alias) => alias.entityType === entity && Number(alias.entityId) === Number(row.id)).map((alias) => alias.alias) }))])) as Record<ReferenceEntity, Candidate[]>;
+  return Object.fromEntries(entries.map(([entity, rows]) => [entity, rows.filter((row) => scopeAllowed(user, row.companyId === null ? null : Number(row.companyId))).map((row) => ({ ...row, id: Number(row.id), companyId: row.companyId === null ? null : Number(row.companyId), aliases: aliases.filter((alias) => alias.entityType === entity && Number(alias.entityId) === Number(row.id)).map((alias) => alias.alias) }))])) as Record<ReferenceEntity, Candidate[]>;
 }
 
 export function resolveReference(entityType: ReferenceEntity, inputValue: string, candidates: Candidate[], companyId: number | null): Resolution {
@@ -101,7 +109,92 @@ async function nextBatchNumber() {
   return `IMP-${day}-${String(Number(row.count) + 1).padStart(4, "0")}`;
 }
 
-export async function createMigrationWorkbook(file: File, user: SessionUser, options: { channel?: ImportSourceChannel; sourcePath?: string; modifiedAt?: Date } = {}) {
+async function nextImportCode(table: "projects" | "companies", prefix: "PRJ" | "COM") {
+  const day = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()).replaceAll("-", "");
+  const [row] = await sqlQuery<{ count: number }>(`SELECT count(*)::int AS count FROM ${table} WHERE code LIKE $1`, [`${prefix}-${day}-%`]);
+  return `${prefix}-${day}-${String(Number(row.count) + 1).padStart(4, "0")}`;
+}
+
+export type ImportProjectContextInput = {
+  projectId?: number | null;
+  projectName?: string;
+  projectCode?: string;
+  companyId?: number | null;
+  createProject?: boolean;
+};
+
+export async function resolveProjectForImport(input: ImportProjectContextInput, user: SessionUser) {
+  if (input.projectId) {
+    await assertProjectAccess(user, Number(input.projectId));
+    const [project] = await sqlQuery<{ id: number; name: string; code: string; companyId: number | null }>(`SELECT id,name,code,company_id AS "companyId" FROM projects WHERE id=$1`, [input.projectId]);
+    if (!project) throw new Error("PROJECT_NOT_FOUND");
+    return { ...project, id: Number(project.id), companyId: project.companyId === null ? null : Number(project.companyId), created: false };
+  }
+  const projectName = String(input.projectName ?? "").trim();
+  if (!projectName) throw new Error("PROJECT_CONTEXT_REQUIRED");
+  const params: unknown[] = [];
+  const conditions = ["TRUE"];
+  if (user.role !== "owner") { params.push(user.companyId); conditions.push(`p.company_id IS NOT DISTINCT FROM $${params.length}`); }
+  if (["project_manager", "designer"].includes(user.role)) { params.push(user.id); conditions.push(`EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id=p.id AND pm.user_id=$${params.length})`); }
+  const projects = await sqlQuery<{ id: number; name: string; code: string; companyId: number | null }>(`SELECT p.id,p.name,p.code,p.company_id AS "companyId" FROM projects p WHERE ${conditions.join(" AND ")} ORDER BY p.id`, params);
+  const existing = projects.find((project) => projectNamesEquivalent(project.name, projectName));
+  if (existing) return { ...existing, id: Number(existing.id), companyId: existing.companyId === null ? null : Number(existing.companyId), created: false };
+  if (!input.createProject) throw new Error("PROJECT_NOT_FOUND");
+  assertCan(user, "projects", "write");
+  const companyId = input.companyId ?? user.companyId;
+  if (companyId !== null && companyId !== undefined) {
+    if (user.role !== "owner" && Number(companyId) !== user.companyId) throw new Error("FORBIDDEN");
+    const [company] = await sqlQuery<{ id: number }>(`SELECT id FROM companies WHERE id=$1 AND status='active'`, [companyId]);
+    if (!company) throw new Error("公司不存在或不可用");
+  }
+  const code = String(input.projectCode ?? "").trim() || await nextImportCode("projects", "PRJ");
+  const statements: TransactionStatement[] = [{
+    query: `INSERT INTO projects(company_id,customer_id,code,name,owner_id,manager_id,status,created_by) VALUES($1,NULL,$2,$3,$4,$5,'待补充',$4) RETURNING id,name,code,company_id AS "companyId"`,
+    params: [companyId ?? null, code, projectName, user.id, user.role === "project_manager" ? user.id : null],
+  }];
+  if (user.role === "project_manager") statements.push({ query: `INSERT INTO project_members(project_id,user_id,responsibility,created_by) VALUES($1,$2,'项目导入',$2) ON CONFLICT(project_id,user_id) DO NOTHING`, params: [{ fromResult: 0, key: "id" }, user.id] });
+  statements.push({ query: `INSERT INTO audit_logs(company_id,project_id,user_id,object_type,object_id,action,after,ip) VALUES($1,$2,$3,'project',$2,'CREATE_FROM_IMPORT',jsonb_build_object('name',$4::text),'127.0.0.1')`, params: [companyId ?? null, { fromResult: 0, key: "id" }, user.id, projectName] });
+  const results = await runTransaction<{ id: number; name: string; code: string; companyId: number | null }>(statements);
+  const project = results[0][0];
+  return { ...project, id: Number(project.id), companyId: project.companyId === null ? null : Number(project.companyId), created: true };
+}
+
+async function resolveCompanyForImport(input: { companyId?: number | null; companyName?: string; createCompany?: boolean }, user: SessionUser) {
+  if (input.companyId) {
+    if (user.role !== "owner" && input.companyId !== user.companyId) throw new Error("FORBIDDEN");
+    const [company] = await sqlQuery<{ id: number; name: string; code: string }>(`SELECT id,name,code FROM companies WHERE id=$1 AND status='active'`, [input.companyId]);
+    if (!company) throw new Error("公司不存在或不可用");
+    return { ...company, id: Number(company.id), created: false };
+  }
+  const name = String(input.companyName ?? "").trim();
+  if (!name) throw new Error("COMPANY_CONTEXT_REQUIRED");
+  const companies = await sqlQuery<{ id: number; name: string; code: string }>(`SELECT id,name,code FROM companies WHERE status='active' ORDER BY id`);
+  const existing = companies.find((company) => normalizeHeader(company.name) === normalizeHeader(name));
+  if (existing) {
+    if (user.role !== "owner" && existing.id !== user.companyId) throw new Error("FORBIDDEN");
+    return { ...existing, id: Number(existing.id), created: false };
+  }
+  if (!input.createCompany) throw new Error("COMPANY_NOT_FOUND");
+  assertCan(user, "companies", "write");
+  const code = await nextImportCode("companies", "COM");
+  const [created] = await sqlQuery<{ id: number; name: string; code: string }>(`INSERT INTO companies(code,name,legal_representative,created_by) VALUES($1,$2,'',$3) RETURNING id,name,code`, [code, name, user.id]);
+  return { ...created, id: Number(created.id), created: true };
+}
+
+export async function getImportContextOptions(user: SessionUser) {
+  assertCan(user, "imports");
+  const companyParams: unknown[] = []; const companyWhere = user.role === "owner" ? "status='active'" : `id=$${companyParams.push(user.companyId)} AND status='active'`;
+  const projectParams: unknown[] = []; const projectConditions = ["TRUE"];
+  if (user.role !== "owner") { projectParams.push(user.companyId); projectConditions.push(`p.company_id IS NOT DISTINCT FROM $${projectParams.length}`); }
+  if (["project_manager", "designer"].includes(user.role)) { projectParams.push(user.id); projectConditions.push(`EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id=p.id AND pm.user_id=$${projectParams.length})`); }
+  const [companies, projects] = await Promise.all([
+    sqlQuery<{ id: number; name: string; code: string }>(`SELECT id,name,code FROM companies WHERE ${companyWhere} ORDER BY name`, companyParams),
+    sqlQuery<{ id: number; name: string; code: string; companyId: number | null; companyName: string }>(`SELECT p.id,p.name,p.code,p.company_id AS "companyId",COALESCE(c.name,'待补充公司') AS "companyName" FROM projects p LEFT JOIN companies c ON c.id=p.company_id WHERE ${projectConditions.join(" AND ")} ORDER BY p.updated_at DESC,p.id DESC`, projectParams),
+  ]);
+  return { companies, projects: projects.map((project) => ({ ...project, id: Number(project.id), companyId: project.companyId === null ? null : Number(project.companyId) })) };
+}
+
+export async function createMigrationWorkbook(file: File, user: SessionUser, options: { channel?: ImportSourceChannel; sourcePath?: string; modifiedAt?: Date; scope?: ImportScope; projectId?: number | null; companyId?: number | null } = {}) {
   assertCan(user, "imports", "write");
   const filename = sanitizeImportFilename(file.name);
   if (!/\.(xlsx|xls|csv)$/i.test(filename)) throw new Error("仅支持 .xlsx / .xls / .csv 文件");
@@ -109,10 +202,35 @@ export async function createMigrationWorkbook(file: File, user: SessionUser, opt
   if (file.size > IMPORT_MAX_FILE_BYTES) throw new Error(`历史迁移文件不能超过 ${IMPORT_MAX_FILE_MB}MB`);
   const bytes = Buffer.from(await file.arrayBuffer()); const fileHash = createHash("sha256").update(bytes).digest("hex");
   const sheets = parseWorkbook(bytes, filename).map((sheet) => ({ ...sheet, signature: sheetSignature(sheet.headers) }));
-  const facts = buildBusinessFacts(sheets);
+  const analysis = analyzeWorkbook(filename, sheets, options.sourcePath);
+  const scope = options.scope ?? "PENDING";
+  if (scope === "PROJECT" && !options.projectId) throw new Error("PROJECT_CONTEXT_REQUIRED");
+  if (scope === "COMPANY" && !options.companyId && !user.companyId) throw new Error("COMPANY_CONTEXT_REQUIRED");
+  let project: { id: number; name: string; companyId: number | null } | null = null;
+  if (options.projectId) {
+    await assertProjectAccess(user, Number(options.projectId));
+    [project] = await sqlQuery<{ id: number; name: string; companyId: number | null }>(`SELECT id,name,company_id AS "companyId" FROM projects WHERE id=$1`, [options.projectId]);
+    if (!project) throw new Error("PROJECT_NOT_FOUND");
+  }
+  const projectId = project ? Number(project.id) : null;
+  const companyId = project?.companyId === null ? null : Number(project?.companyId ?? options.companyId ?? user.companyId) || null;
+  if (user.role !== "owner" && companyId !== null && companyId !== user.companyId) throw new Error("FORBIDDEN");
+  const projectConflict = project ? detectProjectConflict(project.name, analysis.projectCandidate) : null;
+  const contextConfirmed = scope !== "PENDING" && (scope !== "PROJECT" || Boolean(projectId)) && !projectConflict;
+  const baseFacts = buildBusinessFacts(sheets).map((fact) => ({ ...fact, confidence: 9000, confidenceLevel: "HIGH", status: "AUTO_ACCEPTED" }));
+  const recognizedFacts = analysis.facts.map((fact) => ({
+    factType: fact.factType,
+    businessKey: `SHEET:${fact.sheetIndex}:${fact.factType}`,
+    payload: { label: fact.label, resource: fact.resource, plannedCount: fact.plannedCount, sheetName: fact.sheetName, mappings: fact.mappings, warnings: fact.warnings },
+    confidence: fact.confidence,
+    confidenceLevel: fact.level,
+    status: projectConflict ? "CONFLICT" : fact.level === "HIGH" ? "AUTO_ACCEPTED" : "REQUIRES_CONFIRMATION",
+    evidence: [{ sheetIndex: fact.sheetIndex, sourceRow: Number(sheets[fact.sheetIndex]?.rows[0]?.__sourceRow ?? sheets[fact.sheetIndex]?.headerRow ?? 1), sourceColumn: null, sourceCell: null, role: "PRIMARY" as const, rawValue: fact.sheetName }],
+  }));
+  const facts = [...baseFacts, ...recognizedFacts];
   const batchNumber = await nextBatchNumber();
   const groupKey = sourceGroupKey(filename) || fileHash;
-  const [sourceGroup] = await sqlQuery<{ id: number }>(`INSERT INTO import_source_groups(group_key,project_hint) VALUES($1,$2) ON CONFLICT(group_key) DO UPDATE SET last_seen_at=now() RETURNING id`, [groupKey, filename.replace(/\.(xlsx|xls|csv)$/i, "")]);
+  const [sourceGroup] = await sqlQuery<{ id: number }>(`INSERT INTO import_source_groups(group_key,project_hint) VALUES($1,$2) ON CONFLICT(group_key) DO UPDATE SET project_hint=COALESCE(EXCLUDED.project_hint,import_source_groups.project_hint),last_seen_at=now() RETURNING id`, [groupKey, analysis.projectCandidate?.name ?? null]);
   const [pathMatch] = options.sourcePath ? await sqlQuery<{ batchId: number; fileHash: string; batchNumber: string; versionNumber: number }>(`SELECT b.id AS "batchId",f.file_hash AS "fileHash",b.batch_number AS "batchNumber",f.version_number AS "versionNumber" FROM import_files f JOIN import_batches b ON b.id=f.batch_id WHERE lower(f.source_path)=lower($1) ORDER BY f.created_at DESC LIMIT 1`, [options.sourcePath]) : [];
   const [hashMatch] = await sqlQuery<{ batchId: number; batchNumber: string; versionNumber: number }>(`SELECT b.id AS "batchId",b.batch_number AS "batchNumber",f.version_number AS "versionNumber" FROM import_files f JOIN import_batches b ON b.id=f.batch_id WHERE f.file_hash=$1 ORDER BY f.created_at DESC LIMIT 1`, [fileHash]);
   const fingerprintStatus: FingerprintStatus = pathMatch?.fileHash === fileHash ? "UNCHANGED" : hashMatch ? "DUPLICATE" : pathMatch ? "UPDATED" : "NEW";
@@ -124,16 +242,20 @@ export async function createMigrationWorkbook(file: File, user: SessionUser, opt
   await mkdir(resolve(storagePath, ".."), { recursive: true });
   await writeFile(storagePath, bytes, { flag: "wx" });
   const sourceChannel = options.channel ?? "UPLOAD_UI";
-  const workbookStructure = { filename, sheetCount: sheets.length, sheets: sheets.map((sheet) => ({ name: sheet.name, rows: sheet.rowCount, columns: sheet.columnCount, headerRow: sheet.headerRow, classification: sheet.classification })) };
+  const workbookStructure = { filename, sheetCount: sheets.length, sheets: sheets.map((sheet) => ({ name: sheet.name, rows: sheet.rowCount, columns: sheet.columnCount, headerRow: sheet.headerRow, classification: sheet.classification, recognizedFacts: analysis.facts.filter((fact) => fact.sheetIndex === sheet.index).map((fact) => fact.factType) })) };
   const statements: TransactionStatement[] = [
-    { query: `INSERT INTO import_batches(batch_number,company_id,user_id,source_hash,source_channel,status) VALUES($1,$2,$3,$4,$5,'UPLOADED') RETURNING id`, params: [batchNumber, user.companyId, user.id, fileHash, sourceChannel] },
-    { query: `INSERT INTO import_files(batch_id,source_group_id,filename,source_path,extension,file_size,file_hash,modified_at,workbook_structure,fingerprint_status,managed_storage_key,version_number,is_current,channel,sheet_count) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15) RETURNING id`, params: [{ fromResult: 0, key: "id" }, sourceGroup.id, filename, options.sourcePath ?? null, extname(filename).toLowerCase(), file.size, fileHash, options.modifiedAt ?? null, JSON.stringify(workbookStructure), fingerprintStatus, storageKey, versionNumber, isCurrent, sourceChannel, sheets.length] },
+    { query: `INSERT INTO import_batches(batch_number,company_id,project_id,user_id,source_hash,source_channel,scope_type,context_confirmed,project_candidate,project_conflict,analysis_summary,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12) RETURNING id`, params: [batchNumber, companyId, projectId, user.id, fileHash, sourceChannel, scope, contextConfirmed, analysis.projectCandidate?.name ?? null, JSON.stringify(projectConflict), JSON.stringify(analysis), projectConflict ? "PROJECT_CONFLICT" : "UPLOADED"] },
+    { query: `INSERT INTO import_files(batch_id,source_group_id,project_id,filename,source_path,extension,file_size,file_hash,modified_at,workbook_structure,fingerprint_status,managed_storage_key,version_number,is_current,channel,sheet_count) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16) RETURNING id`, params: [{ fromResult: 0, key: "id" }, sourceGroup.id, projectId, filename, options.sourcePath ?? null, extname(filename).toLowerCase(), file.size, fileHash, options.modifiedAt ?? null, JSON.stringify(workbookStructure), fingerprintStatus, storageKey, versionNumber, isCurrent, sourceChannel, sheets.length] },
   ];
-  for (const sheet of sheets) statements.push({ query: `INSERT INTO import_sheets(batch_id,file_id,sheet_index,name,row_count,column_count,headers,preview_rows,raw_rows,classification,classification_confidence,classification_warnings,is_empty,structure) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10,$11,$12::jsonb,$13,$14::jsonb) RETURNING id`, params: [{ fromResult: 0, key: "id" }, { fromResult: 1, key: "id" }, sheet.index, sheet.name, sheet.rowCount, sheet.columnCount, JSON.stringify(sheet.headers), JSON.stringify(sheet.previewRows), JSON.stringify(sheet.rows), sheet.classification, sheet.classificationConfidence, JSON.stringify(sheet.classificationWarnings), sheet.isEmpty, JSON.stringify({ headerRow: sheet.headerRow, signature: sheet.signature })] });
+  for (const sheet of sheets) {
+    const sheetFacts = analysis.facts.filter((fact) => fact.sheetIndex === sheet.index);
+    const sheetConfidence = sheetFacts.length ? Math.round(sheetFacts.reduce((sum, fact) => sum + fact.confidence, 0) / sheetFacts.length) : sheet.classificationConfidence;
+    statements.push({ query: `INSERT INTO import_sheets(batch_id,file_id,project_id,sheet_index,name,row_count,column_count,headers,preview_rows,raw_rows,classification,classification_confidence,classification_warnings,is_empty,structure,recognized_facts,analysis_confidence) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13::jsonb,$14,$15::jsonb,$16::jsonb,$17) RETURNING id`, params: [{ fromResult: 0, key: "id" }, { fromResult: 1, key: "id" }, projectId, sheet.index, sheet.name, sheet.rowCount, sheet.columnCount, JSON.stringify(sheet.headers), JSON.stringify(sheet.previewRows), JSON.stringify(sheet.rows), sheet.classification, sheet.classificationConfidence, JSON.stringify(sheet.classificationWarnings), sheet.isEmpty, JSON.stringify({ headerRow: sheet.headerRow, signature: sheet.signature, titleValues: sheet.titleValues ?? [] }), JSON.stringify(sheetFacts), sheetConfidence] });
+  }
   for (const fact of facts) {
     const factResultIndex = statements.length;
-    statements.push({ query: `INSERT INTO import_business_facts(batch_id,fact_type,business_key,payload) VALUES($1,$2,$3,$4::jsonb) RETURNING id`, params: [{ fromResult: 0, key: "id" }, fact.factType, fact.businessKey, JSON.stringify(fact.payload)] });
-    for (const evidence of fact.evidence) statements.push({ query: `INSERT INTO import_business_fact_evidence(fact_id,file_id,sheet_id,source_row,source_column,source_cell,evidence_role,raw_value) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, params: [{ fromResult: factResultIndex, key: "id" }, { fromResult: 1, key: "id" }, { fromResult: evidence.sheetIndex + 2, key: "id" }, evidence.sourceRow, evidence.sourceColumn, evidence.sourceCell, evidence.role, evidence.rawValue] });
+    statements.push({ query: `INSERT INTO import_business_facts(batch_id,project_id,company_id,fact_type,business_key,payload,confidence,confidence_level,status) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9) RETURNING id`, params: [{ fromResult: 0, key: "id" }, projectId, companyId, fact.factType, fact.businessKey, JSON.stringify(fact.payload), fact.confidence, fact.confidenceLevel, fact.status] });
+    for (const evidence of fact.evidence) statements.push({ query: `INSERT INTO import_business_fact_evidence(fact_id,file_id,sheet_id,project_id,source_row,source_column,source_cell,evidence_role,raw_value) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, params: [{ fromResult: factResultIndex, key: "id" }, { fromResult: 1, key: "id" }, { fromResult: evidence.sheetIndex + 2, key: "id" }, projectId, evidence.sourceRow, evidence.sourceColumn, evidence.sourceCell, evidence.role, evidence.rawValue] });
   }
   let results: Record<string, unknown>[][];
   try { results = await runTransaction<Record<string, unknown>>(statements); }
@@ -144,9 +266,57 @@ export async function createMigrationWorkbook(file: File, user: SessionUser, opt
   const learnedAliases = await sqlQuery<{ businessType: string; sourceField: string; targetField: string }>(`SELECT business_type AS "businessType",source_field AS "sourceField",target_field AS "targetField" FROM field_aliases WHERE company_id IS NULL OR company_id=$1 ORDER BY created_at DESC`, [user.companyId]);
   return {
     batchId, batchNumber, filename, fileSize: file.size, sheetCount: sheets.length, sourceChannel,
+    scope, projectId, companyId, contextConfirmed, projectConflict, analysis,
     fingerprintStatus, versionNumber, sourceGroupKey: groupKey, duplicateOf: (pathMatch ?? hashMatch)?.batchNumber ?? null, duplicateOfBatchId: (pathMatch ?? hashMatch)?.batchId ?? null,
-    sheets: sheets.map((sheet, index) => ({ id: Number(results[index + 2][0].id), name: sheet.name, rowCount: sheet.rowCount, columnCount: sheet.columnCount, headers: sheet.headers, previewRows: sheet.previewRows, classification: sheet.classification, classificationConfidence: sheet.classificationConfidence, classificationWarnings: sheet.classificationWarnings, learnedMappings: Object.fromEntries(migrationDefinitionsForAliases(learnedAliases, sheet.headers)), matchedTemplate: templates.find((template) => template.signature === sheet.signature) ?? null })),
+    sheets: sheets.map((sheet, index) => ({ id: Number(results[index + 2][0].id), name: sheet.name, rowCount: sheet.rowCount, columnCount: sheet.columnCount, headers: sheet.headers, previewRows: sheet.previewRows, classification: sheet.classification, classificationConfidence: sheet.classificationConfidence, classificationWarnings: sheet.classificationWarnings, recognizedFacts: analysis.facts.filter((fact) => fact.sheetIndex === sheet.index), learnedMappings: Object.fromEntries(migrationDefinitionsForAliases(learnedAliases, sheet.headers)), matchedTemplate: templates.find((template) => template.signature === sheet.signature) ?? null })),
   };
+}
+
+export async function bindMigrationContext(input: {
+  batchId: number;
+  scope: Exclude<ImportScope, "PENDING">;
+  projectId?: number | null;
+  projectName?: string;
+  projectCode?: string;
+  createProject?: boolean;
+  companyId?: number | null;
+  companyName?: string;
+  createCompany?: boolean;
+  overrideConflict?: boolean;
+}, user: SessionUser) {
+  const batch = await requireBatch(input.batchId, user); assertCan(user, "imports", "write");
+  if (!["UPLOADED", "PROJECT_CONFLICT"].includes(String(batch.status))) throw new Error("数据归属只能在暂存预检前修改");
+  let project: Awaited<ReturnType<typeof resolveProjectForImport>> | null = null;
+  let company: Awaited<ReturnType<typeof resolveCompanyForImport>> | null = null;
+  if (input.scope === "PROJECT") project = await resolveProjectForImport(input, user);
+  if (input.scope === "COMPANY") company = await resolveCompanyForImport(input, user);
+  const projectId = project?.id ?? null;
+  const companyId = project?.companyId ?? company?.id ?? (input.scope === "MASTER" ? user.companyId : null);
+  const analysis = jsonValue<IntelligentWorkbookAnalysis | null>(batch.analysis_summary, null);
+  const conflict = project ? detectProjectConflict(project.name, analysis?.projectCandidate ?? null) : null;
+  const contextConfirmed = !conflict || Boolean(input.overrideConflict);
+  const nextStatus = conflict && !input.overrideConflict ? "PROJECT_CONFLICT" : "UPLOADED";
+  const conflictJson = conflict && !input.overrideConflict ? JSON.stringify(conflict) : null;
+  await runTransaction([
+    { query: `UPDATE import_batches SET scope_type=$1,company_id=$2,project_id=$3,context_confirmed=$4,project_conflict=$5::jsonb,status=$6,updated_at=now() WHERE id=$7`, params: [input.scope, companyId, projectId, contextConfirmed, conflictJson, nextStatus, input.batchId] },
+    { query: `UPDATE import_files SET project_id=$1 WHERE batch_id=$2`, params: [projectId, input.batchId] },
+    { query: `UPDATE import_sheets SET project_id=$1 WHERE batch_id=$2`, params: [projectId, input.batchId] },
+    { query: `UPDATE import_staging_rows SET project_id=$1 WHERE batch_id=$2`, params: [projectId, input.batchId] },
+    { query: `UPDATE import_business_facts SET project_id=$1,company_id=$2,status=CASE WHEN $3::boolean THEN CASE WHEN confidence_level='HIGH' THEN 'AUTO_ACCEPTED' ELSE 'REQUIRES_CONFIRMATION' END ELSE 'CONFLICT' END WHERE batch_id=$4`, params: [projectId, companyId, contextConfirmed, input.batchId] },
+    { query: `UPDATE import_business_fact_evidence SET project_id=$1 WHERE fact_id IN (SELECT id FROM import_business_facts WHERE batch_id=$2)`, params: [projectId, input.batchId] },
+    { query: `UPDATE import_data_lineage SET project_id=$1 WHERE batch_id=$2`, params: [projectId, input.batchId] },
+    { query: `INSERT INTO audit_logs(company_id,project_id,user_id,object_type,object_id,action,after,ip) VALUES($1,$2,$3,'import_batch',$4,'BIND_IMPORT_CONTEXT',$5::jsonb,'127.0.0.1')`, params: [companyId, projectId, user.id, input.batchId, JSON.stringify({ scope: input.scope, projectId, companyId, overrideConflict: Boolean(input.overrideConflict) })] },
+  ]);
+  return { scope: input.scope, contextConfirmed, project, company, conflict: conflict && !input.overrideConflict ? conflict : null, analysis };
+}
+
+export async function reviewBusinessFact(batchId: number, factId: number, decision: "ACCEPT" | "IGNORE", user: SessionUser) {
+  const batch = await requireBatch(batchId, user); assertCan(user, "imports", "write");
+  if (!Boolean(batch.context_confirmed)) throw new Error("请先确认数据归属并处理项目冲突");
+  const status = decision === "ACCEPT" ? "USER_ACCEPTED" : "IGNORED";
+  const [fact] = await sqlQuery<{ id: number }>(`UPDATE import_business_facts SET status=$1 WHERE id=$2 AND batch_id=$3 AND status IN ('REQUIRES_CONFIRMATION','AUTO_ACCEPTED') RETURNING id`, [status, factId, batchId]);
+  if (!fact) throw new Error("识别项不存在或当前状态不可修改");
+  return { ok: true, factId, status };
 }
 
 function migrationDefinitionsForAliases(aliases: { businessType: string; sourceField: string; targetField: string }[], headers: string[]) {
@@ -182,24 +352,41 @@ async function saveMappingTemplate(user: SessionUser, name: string, businessType
 }
 
 export async function stageMigrationBatch(input: { batchId: number; sheetId: number; businessType: ResourceKey; mappings: Record<string, string>; saveTemplateName?: string }, user: SessionUser) {
-  const batch = await requireBatch(input.batchId, user); assertCan(user, "imports", "write"); assertCan(user, input.businessType, "write");
+  const batch = await requireBatch(input.batchId, user); assertCan(user, "imports", "write");
+  if (user.role !== "owner") assertCan(user, input.businessType, "write");
   if (["COMPLETED", "ROLLED_BACK"].includes(String(batch.status))) throw new Error("已完成或已撤销的批次不能重新暂存");
+  if (String(batch.status) === "PROJECT_CONFLICT" || (String(batch.scope_type) === "PROJECT" && !Boolean(batch.context_confirmed))) throw new Error("PROJECT_CONFLICT：请先确认目标项目");
   const definition = migrationDefinition(input.businessType); if (!definition) throw new Error("不支持的业务类型");
+  const projectScopedTypes = new Set<ResourceKey>(["contracts", "receivables", "receipts", "skus", "quotes", "purchase-requests", "payables", "payments", "invoices"]);
+  const batchProjectId = batch.project_id === null ? null : Number(batch.project_id);
+  const batchCompanyId = batch.company_id === null ? null : Number(batch.company_id);
+  const contextBound = Boolean(batch.context_confirmed);
+  if (projectScopedTypes.has(input.businessType) && (!batchProjectId || String(batch.scope_type) !== "PROJECT")) throw new Error("PROJECT_CONTEXT_REQUIRED");
   const [sheet] = await sqlQuery<{ id: number; headers: string[]; rawRows: Record<string, unknown>[] }>(`SELECT id,headers,raw_rows AS "rawRows" FROM import_sheets WHERE id=$1 AND batch_id=$2`, [input.sheetId, input.batchId]);
   if (!sheet) throw new Error("Sheet 不存在");
   const headers = jsonValue(sheet.headers, [] as string[]); const rawRows = jsonValue(sheet.rawRows, [] as Record<string, unknown>[]);
   const mappedTargets = new Set(Object.values(input.mappings).filter(Boolean));
-  const missing = definition.fields.filter((field) => field.required && !mappedTargets.has(field.key));
+  const missing = definition.fields.filter((field) => field.required && !mappedTargets.has(field.key) && !(field.key === "projectId" && contextBound && batchProjectId) && !(field.key === "companyId" && contextBound && batchCompanyId));
   if (missing.length) throw new Error(`缺少必填字段映射：${missing.map((field) => field.displayLabel).join("、")}`);
   const catalog = await loadCatalog(user); const duplicates = await existingDuplicates(input.businessType); const seen = new Set<string>();
   const staged = rawRows.map((raw, index) => {
     const normalized = applyFieldMapping(input.businessType, raw, input.mappings); const issues: MigrationIssue[] = []; const resolutions: Resolution[] = [];
-    let companyId = user.companyId;
+    let companyId = contextBound ? batchCompanyId ?? user.companyId : user.companyId;
     for (const field of definition.fields.filter((item) => item.reference === "company")) {
+      if (contextBound && batchCompanyId) { normalized[field.key] = batchCompanyId; companyId = batchCompanyId; continue; }
       const value = String(normalized[field.key] ?? ""); const resolution = { ...resolveReference("company", value, catalog.company, null), fieldKey: field.key }; resolutions.push(resolution);
       if (resolution.resolvedEntityId) { normalized[field.key] = resolution.resolvedEntityId; companyId = resolution.resolvedEntityId; }
     }
     for (const field of definition.fields.filter((item) => item.reference && item.reference !== "company")) {
+      if (field.reference === "project" && batchProjectId) {
+        const inputProject = String(normalized[field.key] ?? "").trim();
+        if (inputProject) {
+          const detected = resolveReference("project", inputProject, catalog.project, companyId);
+          if (detected.resolvedEntityId && detected.resolvedEntityId !== batchProjectId) issues.push({ field: field.displayLabel, severity: "ERROR", code: "PROJECT_CONFLICT", message: "行内项目与当前导入项目不一致" });
+        }
+        normalized[field.key] = batchProjectId;
+        continue;
+      }
       const value = String(normalized[field.key] ?? ""); if (!value && !field.required) continue;
       const resolution = { ...resolveReference(field.reference!, value, catalog[field.reference!], companyId), fieldKey: field.key }; resolutions.push(resolution);
       if (resolution.resolvedEntityId) { normalized[field.key] = resolution.resolvedEntityId; companyId ??= resolution.candidates[0]?.companyId ?? null; }
@@ -224,7 +411,7 @@ export async function stageMigrationBatch(input: { batchId: number; sheetId: num
   });
   const eligible = staged.map((row, index) => ({ row, index })).filter(({ row }) => row.action === "CREATE" && !row.issues.some((issue) => issue.severity === "ERROR"));
   if (eligible.length) {
-    const businessPreflight = await preflightImport(input.businessType, eligible.map(({ row }) => row.normalized), user);
+    const businessPreflight = await preflightImport(input.businessType, eligible.map(({ row }) => row.normalized), user, { ownerMigration: true });
     for (const error of businessPreflight.errors) {
       const target = eligible[Math.max(0, error.row - 2)]?.row; if (!target) continue;
       if (!target.issues.some((issue) => issue.message === error.message && issue.field === error.field)) target.issues.push({ field: error.field, severity: "ERROR", code: "BUSINESS_RULE", message: error.message });
@@ -236,7 +423,7 @@ export async function stageMigrationBatch(input: { batchId: number; sheetId: num
     const statements: TransactionStatement[] = [];
     for (const row of staged.slice(offset, offset + 250)) {
       const resultIndex = statements.length;
-      statements.push({ query: `INSERT INTO import_staging_rows(batch_id,sheet_id,source_row,raw_data,normalized_data,issues,duplicate_status,duplicate_target_id,action,status) VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7,$8,$9,$10) RETURNING id`, params: [input.batchId, input.sheetId, row.sourceRow, JSON.stringify(row.raw), JSON.stringify(row.normalized), JSON.stringify(row.issues), row.duplicateStatus, row.duplicateTargetId, row.action, row.status] });
+      statements.push({ query: `INSERT INTO import_staging_rows(batch_id,sheet_id,project_id,business_type,source_row,raw_data,normalized_data,issues,duplicate_status,duplicate_target_id,action,status) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9,$10,$11,$12) RETURNING id`, params: [input.batchId, input.sheetId, batchProjectId, input.businessType, row.sourceRow, JSON.stringify(row.raw), JSON.stringify(row.normalized), JSON.stringify(row.issues), row.duplicateStatus, row.duplicateTargetId, row.action, row.status] });
       for (const resolution of row.resolutions) statements.push({ query: `INSERT INTO import_reference_resolutions(batch_id,staging_row_id,field_key,entity_type,input_value,status,resolved_entity_id,candidates) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`, params: [input.batchId, { fromResult: resultIndex, key: "id" }, resolution.fieldKey, resolution.entityType, resolution.inputValue, resolution.status, resolution.resolvedEntityId, JSON.stringify(resolution.candidates.slice(0, 8))] });
     }
     await runTransaction(statements);
@@ -249,20 +436,22 @@ export async function stageMigrationBatch(input: { batchId: number; sheetId: num
 }
 
 export async function getMigrationOverview(user: SessionUser) {
-  assertCan(user, "imports"); const scope = user.role === "owner" ? { sql: "TRUE", params: [] as unknown[] } : { sql: "b.company_id=$1", params: [user.companyId] as unknown[] };
-  const batches = await sqlQuery<Record<string, unknown>>(`SELECT b.id,b.batch_number AS "batchNumber",b.business_type AS "businessType",b.source_hash AS "sourceHash",b.source_channel AS "sourceChannel",b.status,b.total_rows AS "totalRows",b.ready_rows AS "readyRows",b.warning_rows AS "warningRows",b.error_rows AS "errorRows",b.success_rows AS "successRows",b.skipped_rows AS "skippedRows",b.created_at AS "createdAt",f.filename,s.name AS "sheetName",m.name AS "mappingName",u.name AS "userName" FROM import_batches b LEFT JOIN import_files f ON f.batch_id=b.id LEFT JOIN import_sheets s ON s.batch_id=b.id AND s.selected LEFT JOIN import_mapping_templates m ON m.id=b.mapping_template_id JOIN users u ON u.id=b.user_id WHERE ${scope.sql} ORDER BY b.created_at DESC LIMIT 30`, scope.params);
+  assertCan(user, "imports");
+  const scope = user.role === "owner" ? { sql: "TRUE", params: [] as unknown[] } : { sql: `(b.company_id=$1 OR EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id=b.project_id AND pm.user_id=$2))`, params: [user.companyId, user.id] as unknown[] };
+  const batches = await sqlQuery<Record<string, unknown>>(`SELECT b.id,b.batch_number AS "batchNumber",b.business_type AS "businessType",b.scope_type AS "scopeType",b.project_id AS "projectId",p.name AS "projectName",b.project_candidate AS "projectCandidate",b.context_confirmed AS "contextConfirmed",b.project_conflict AS "projectConflict",b.analysis_summary AS analysis,b.source_hash AS "sourceHash",b.source_channel AS "sourceChannel",b.status,b.total_rows AS "totalRows",b.ready_rows AS "readyRows",b.warning_rows AS "warningRows",b.error_rows AS "errorRows",b.success_rows AS "successRows",b.skipped_rows AS "skippedRows",b.created_at AS "createdAt",f.filename,s.name AS "sheetName",m.name AS "mappingName",u.name AS "userName" FROM import_batches b LEFT JOIN projects p ON p.id=b.project_id LEFT JOIN import_files f ON f.batch_id=b.id LEFT JOIN import_sheets s ON s.batch_id=b.id AND s.selected LEFT JOIN import_mapping_templates m ON m.id=b.mapping_template_id JOIN users u ON u.id=b.user_id WHERE ${scope.sql} ORDER BY b.created_at DESC LIMIT 30`, scope.params);
   const [summary] = await sqlQuery<Record<string, unknown>>(`SELECT (SELECT count(*)::int FROM projects) AS projects,(SELECT count(*)::int FROM suppliers) AS suppliers,(SELECT count(*)::int FROM skus) AS skus,(SELECT count(*)::int FROM purchase_orders) AS purchases,(SELECT count(*)::int FROM payments WHERE NOT is_void) AS payments`);
-  return { batches, summary };
+  return { batches, summary, ...(await getImportContextOptions(user)) };
 }
 
 export async function getMigrationBatch(batchId: number, user: SessionUser, page = 1) {
   const batch = await requireBatch(batchId, user); const pageSize = 50; const offset = Math.max(0, page - 1) * pageSize;
-  const [file] = await sqlQuery<Record<string, unknown>>(`SELECT filename,source_path AS "sourcePath",extension,file_size AS "fileSize",sheet_count AS "sheetCount",fingerprint_status AS "fingerprintStatus",version_number AS "versionNumber",channel,managed_storage_key AS "managedStorageKey" FROM import_files WHERE batch_id=$1`, [batchId]);
-  const sheets = await sqlQuery<Record<string, unknown>>(`SELECT id,name,row_count AS "rowCount",column_count AS "columnCount",headers,preview_rows AS "previewRows",classification,classification_confidence AS "classificationConfidence",classification_warnings AS "classificationWarnings",is_empty AS "isEmpty",selected FROM import_sheets WHERE batch_id=$1 ORDER BY sheet_index`, [batchId]);
-  const rows = await sqlQuery<Record<string, unknown>>(`SELECT id,source_row AS "sourceRow",normalized_data AS "normalizedData",issues,duplicate_status AS "duplicateStatus",duplicate_target_id AS "duplicateTargetId",action,status,target_table AS "targetTable",target_id AS "targetId" FROM import_staging_rows WHERE batch_id=$1 ORDER BY source_row LIMIT $2 OFFSET $3`, [batchId, pageSize, offset]);
+  const [file] = await sqlQuery<Record<string, unknown>>(`SELECT project_id AS "projectId",filename,source_path AS "sourcePath",extension,file_size AS "fileSize",sheet_count AS "sheetCount",fingerprint_status AS "fingerprintStatus",version_number AS "versionNumber",channel,managed_storage_key AS "managedStorageKey" FROM import_files WHERE batch_id=$1`, [batchId]);
+  const sheets = await sqlQuery<Record<string, unknown>>(`SELECT id,project_id AS "projectId",name,row_count AS "rowCount",column_count AS "columnCount",headers,preview_rows AS "previewRows",classification,classification_confidence AS "classificationConfidence",classification_warnings AS "classificationWarnings",recognized_facts AS "recognizedFacts",analysis_confidence AS "analysisConfidence",is_empty AS "isEmpty",selected FROM import_sheets WHERE batch_id=$1 ORDER BY sheet_index`, [batchId]);
+  const rows = await sqlQuery<Record<string, unknown>>(`SELECT id,project_id AS "projectId",business_type AS "businessType",source_row AS "sourceRow",normalized_data AS "normalizedData",issues,duplicate_status AS "duplicateStatus",duplicate_target_id AS "duplicateTargetId",action,status,target_table AS "targetTable",target_id AS "targetId" FROM import_staging_rows WHERE batch_id=$1 ORDER BY source_row LIMIT $2 OFFSET $3`, [batchId, pageSize, offset]);
   const resolutions = await sqlQuery<Record<string, unknown>>(`SELECT x.id,x.staging_row_id AS "stagingRowId",x.field_key AS "fieldKey",x.entity_type AS "entityType",x.input_value AS "inputValue",x.status,x.resolved_entity_id AS "resolvedEntityId",x.candidates FROM import_reference_resolutions x WHERE x.staging_row_id IN (SELECT id FROM import_staging_rows WHERE batch_id=$1 ORDER BY source_row LIMIT $2 OFFSET $3) AND x.status<>'EXACT_MATCH' ORDER BY x.staging_row_id,x.id`, [batchId, pageSize, offset]);
   const [blocking] = await sqlQuery<{ unresolved: number }>(`SELECT count(*)::int AS unresolved FROM import_reference_resolutions x JOIN import_staging_rows r ON r.id=x.staging_row_id WHERE x.batch_id=$1 AND x.status<>'EXACT_MATCH' AND r.action<>'SKIP'`, [batchId]);
-  return { batch, file, sheets, rows, resolutions, unresolvedReferences: Number(blocking.unresolved), page, pageSize };
+  const facts = await sqlQuery<Record<string, unknown>>(`SELECT id,project_id AS "projectId",fact_type AS "factType",business_key AS "businessKey",payload,confidence,confidence_level AS "confidenceLevel",status FROM import_business_facts WHERE batch_id=$1 AND fact_type<>'COST_ITEM' ORDER BY confidence DESC,id`, [batchId]);
+  return { batch, file, sheets, rows, resolutions, facts, unresolvedReferences: Number(blocking.unresolved), page, pageSize };
 }
 
 export async function exportMigrationErrors(batchId: number, user: SessionUser) {
@@ -316,9 +505,11 @@ export async function confirmMigrationBatch(batchId: number, user: SessionUser, 
   const batch = await requireBatch(batchId, user); assertCan(user, "imports", "write");
   if (isRealDataMode() && confirmation !== "确认导入真实数据") throw new Error("请输入“确认导入真实数据”后再继续");
   if (String(batch.status) !== "VALIDATED") throw new Error("当前批次不处于人工确认阶段");
-  const [blocking] = await sqlQuery<{ errors: number; unresolved: number }>(`SELECT (SELECT count(*)::int FROM import_staging_rows WHERE batch_id=$1 AND status='ERROR' AND action<>'SKIP') AS errors,(SELECT count(*)::int FROM import_reference_resolutions x JOIN import_staging_rows r ON r.id=x.staging_row_id WHERE x.batch_id=$1 AND x.status<>'EXACT_MATCH' AND r.action<>'SKIP') AS unresolved`, [batchId]);
+  if (String(batch.scope_type) === "PROJECT" && (!batch.project_id || !Boolean(batch.context_confirmed))) throw new Error("PROJECT_CONTEXT_REQUIRED");
+  const [blocking] = await sqlQuery<{ errors: number; unresolved: number; facts: number }>(`SELECT (SELECT count(*)::int FROM import_staging_rows WHERE batch_id=$1 AND status='ERROR' AND action<>'SKIP') AS errors,(SELECT count(*)::int FROM import_reference_resolutions x JOIN import_staging_rows r ON r.id=x.staging_row_id WHERE x.batch_id=$1 AND x.status<>'EXACT_MATCH' AND r.action<>'SKIP') AS unresolved,(SELECT count(*)::int FROM import_business_facts WHERE batch_id=$1 AND status IN ('REQUIRES_CONFIRMATION','CONFLICT')) AS facts`, [batchId]);
   if (Number(blocking.errors) > 0) throw new Error("仍有红色错误，不能确认导入");
   if (Number(blocking.unresolved) > 0) throw new Error("仍有关联候选未逐项确认，请先完成选择或跳过对应行");
+  if (String(batch.scope_type) !== "PENDING" && Number(blocking.facts) > 0) throw new Error("仍有低置信度业务识别项需要确认或忽略");
   await runTransaction([
     { query: `UPDATE import_staging_rows SET status='CONFIRMED',updated_at=now() WHERE batch_id=$1 AND status='WARNING'`, params: [batchId] },
     { query: `UPDATE import_batches SET confirmed_at=now(),status='READY_TO_IMPORT',updated_at=now() WHERE id=$1`, params: [batchId] },
@@ -327,14 +518,18 @@ export async function confirmMigrationBatch(batchId: number, user: SessionUser, 
 }
 
 export async function importMigrationBatch(batchId: number, user: SessionUser) {
-  const batch = await requireBatch(batchId, user); assertCan(user, "imports", "write"); const resource = String(batch.business_type) as ResourceKey; assertCan(user, resource, "write");
+  const batch = await requireBatch(batchId, user); assertCan(user, "imports", "write"); const resource = String(batch.business_type) as ResourceKey;
+  if (user.role !== "owner") assertCan(user, resource, "write");
   if (String(batch.status) !== "READY_TO_IMPORT") throw new Error("批次尚未完成人工确认");
-  const rows = await sqlQuery<{ id: number; fileId: number; sheetId: number; sourceRow: number; normalizedData: Record<string, unknown>; rawData: Record<string, unknown>; filename: string; sheetName: string }>(`SELECT r.id,f.id AS "fileId",s.id AS "sheetId",r.source_row AS "sourceRow",r.normalized_data AS "normalizedData",r.raw_data AS "rawData",f.filename,s.name AS "sheetName" FROM import_staging_rows r JOIN import_sheets s ON s.id=r.sheet_id JOIN import_files f ON f.id=s.file_id WHERE r.batch_id=$1 AND r.status IN ('READY','CONFIRMED') AND r.action='CREATE' ORDER BY r.source_row`, [batchId]);
+  if (String(batch.scope_type) === "PROJECT" && (!batch.project_id || !Boolean(batch.context_confirmed))) throw new Error("PROJECT_CONTEXT_REQUIRED");
+  if (String(batch.scope_type) === "PROJECT" && !batch.company_id) throw new Error("项目尚未补充所属公司，只能完成分析和暂存，不能写入正式业务表");
+  const rows = await sqlQuery<{ id: number; projectId: number | null; fileId: number; sheetId: number; sourceRow: number; normalizedData: Record<string, unknown>; rawData: Record<string, unknown>; filename: string; sheetName: string }>(`SELECT r.id,r.project_id AS "projectId",f.id AS "fileId",s.id AS "sheetId",r.source_row AS "sourceRow",r.normalized_data AS "normalizedData",r.raw_data AS "rawData",f.filename,s.name AS "sheetName" FROM import_staging_rows r JOIN import_sheets s ON s.id=r.sheet_id JOIN import_files f ON f.id=s.file_id WHERE r.batch_id=$1 AND r.status IN ('READY','CONFIRMED') AND r.action='CREATE' ORDER BY r.source_row`, [batchId]);
+  if (batch.project_id && rows.some((row) => Number(row.projectId) !== Number(batch.project_id))) throw new Error("项目隔离校验失败：暂存数据与批次项目不一致");
   await sqlQuery(`UPDATE import_staging_rows SET status='SKIPPED',updated_at=now() WHERE batch_id=$1 AND action<>'CREATE'`, [batchId]);
   if (!rows.length) { await sqlQuery(`UPDATE import_batches SET status='COMPLETED',skipped_rows=total_rows,completed_at=now(),updated_at=now() WHERE id=$1`, [batchId]); return { successRows: 0, skippedRows: Number(batch.total_rows) }; }
-  const normalized = rows.map((row) => jsonValue(row.normalizedData, {})); const checked = await preflightImport(resource, normalized, user);
+  const normalized = rows.map((row) => jsonValue(row.normalizedData, {})); const checked = await preflightImport(resource, normalized, user, { ownerMigration: true });
   if (checked.errors.length) throw new Error(`正式写入前复检失败：${checked.errors.slice(0, 3).map((error) => `第${error.row}行 ${error.message}`).join("；")}`);
-  const lineage: MigrationLineageInput[] = rows.map((row) => ({ stagingId: Number(row.id), fileId: Number(row.fileId), sheetId: Number(row.sheetId), filename: row.filename, sheetName: row.sheetName, sourceRow: Number(row.sourceRow), rawData: jsonValue(row.rawData, {}) }));
+  const lineage: MigrationLineageInput[] = rows.map((row) => ({ stagingId: Number(row.id), projectId: row.projectId === null ? null : Number(row.projectId), fileId: Number(row.fileId), sheetId: Number(row.sheetId), filename: row.filename, sheetName: row.sheetName, sourceRow: Number(row.sourceRow), rawData: jsonValue(row.rawData, {}) }));
   try { return await importRowsAtomic(resource, normalized, rows[0].filename, checked.sourceHash, checked.companyId, user, { batchId, stagingRows: lineage }); }
   catch (error) { await sqlQuery(`UPDATE import_batches SET status='READY_TO_IMPORT',error_message=$1,updated_at=now() WHERE id=$2`, [error instanceof Error ? error.message : "正式导入失败", batchId]); throw error; }
 }

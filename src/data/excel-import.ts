@@ -5,7 +5,7 @@ import { assertCan, type ResourceKey } from "@/lib/permissions";
 import { validateNormalizedRows } from "./excel";
 
 export type ImportError = { row: number; field: string; message: string };
-export type MigrationLineageInput = { stagingId: number; fileId: number; sheetId: number; filename: string; sheetName: string; sourceRow: number; rawData: Record<string, unknown> };
+export type MigrationLineageInput = { stagingId: number; projectId?: number | null; fileId: number; sheetId: number; filename: string; sheetName: string; sourceRow: number; rawData: Record<string, unknown> };
 const targetTables: Partial<Record<ResourceKey, string>> = {
   companies: "companies", accounts: "company_accounts", customers: "customers", suppliers: "suppliers", projects: "projects", contracts: "contracts",
   receivables: "receivable_plans", receipts: "receipts", skus: "skus", quotes: "supplier_quotes", "purchase-requests": "purchase_requests",
@@ -19,8 +19,9 @@ const uniqueConfig: Partial<Record<ResourceKey, { table: string; column: string;
 async function one(query: string, params: unknown[]) { return (await sqlQuery<Record<string, unknown>>(query, params))[0]; }
 function add(errors: ImportError[], row: number, field: string, message: string) { errors.push({ row: row + 2, field, message }); }
 
-export async function preflightImport(resource: ResourceKey, rows: Record<string, unknown>[], user: SessionUser) {
-  assertCan(user, "imports", "write"); assertCan(user, resource, "write");
+export async function preflightImport(resource: ResourceKey, rows: Record<string, unknown>[], user: SessionUser, options: { ownerMigration?: boolean } = {}) {
+  assertCan(user, "imports", "write");
+  if (!(options.ownerMigration && user.role === "owner")) assertCan(user, resource, "write");
   const errors = validateNormalizedRows(resource, rows);
   const sourceHash = createHash("sha256").update(JSON.stringify({ resource, rows })).digest("hex");
   const duplicate = await one("SELECT id FROM import_jobs WHERE source_hash=$1 AND status='已完成'", [sourceHash]);
@@ -107,7 +108,7 @@ export async function importRowsAtomic(resource: ResourceKey, rows: Record<strin
       const targetId: TransactionParam = { fromResult: targetResultIndex, key: "id" };
       statements.push(
         { query: "UPDATE import_staging_rows SET status='IMPORTED',target_table=$1,target_id=$2,updated_at=now() WHERE id=$3", params: [targetTable, targetId, lineage.stagingId] },
-        { query: "INSERT INTO import_data_lineage(batch_id,staging_row_id,target_table,target_id,source_file_id,source_sheet_id,filename,sheet_name,source_row,mapping_rule_id,evidence_role,raw_data) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,mapping_template_id,'PRIMARY',$10::jsonb FROM import_batches WHERE id=$1", params: [migration.batchId, lineage.stagingId, targetTable, targetId, lineage.fileId, lineage.sheetId, lineage.filename, lineage.sheetName, lineage.sourceRow, JSON.stringify(lineage.rawData)] },
+        { query: "INSERT INTO import_data_lineage(batch_id,staging_row_id,project_id,target_table,target_id,source_file_id,source_sheet_id,filename,sheet_name,source_row,mapping_rule_id,evidence_role,raw_data) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,mapping_template_id,'PRIMARY',$11::jsonb FROM import_batches WHERE id=$1", params: [migration.batchId, lineage.stagingId, lineage.projectId ?? null, targetTable, targetId, lineage.fileId, lineage.sheetId, lineage.filename, lineage.sheetName, lineage.sourceRow, JSON.stringify(lineage.rawData)] },
       );
     }
   }

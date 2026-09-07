@@ -11,9 +11,9 @@ import { getDashboardData } from "@/data/dashboard";
 import { getDashboardAnalytics } from "@/data/analytics/dashboard";
 import { getCustomerProfile, getSupplierProfile } from "@/data/partners";
 import * as XLSX from "xlsx";
-import { confirmMigrationBatch, createMigrationWorkbook, getMigrationBatch, importMigrationBatch, rollbackMigrationBatch, stageMigrationBatch, suggestedMappings, updateStagingRow } from "@/data/data-migration";
+import { bindMigrationContext, confirmMigrationBatch, createMigrationWorkbook, getMigrationBatch, importMigrationBatch, resolveProjectForImport, reviewBusinessFact, rollbackMigrationBatch, stageMigrationBatch, suggestedMappings, updateStagingRow } from "@/data/data-migration";
 import { createWorkspacePurchaseRequest, getProcurementWorkspace } from "@/data/procurement-workspace";
-import { getProjectDetail } from "@/data/project-detail";
+import { getProjectDetail, getProjectSections } from "@/data/project-detail";
 import { authenticate } from "@/lib/auth";
 import { assertProjectAccess, assertWorkflowAccess } from "@/lib/access";
 import type { SessionUser } from "@/lib/auth";
@@ -265,6 +265,53 @@ describe.sequential("business workflow integration", () => {
     await confirmMigrationBatch(retry.batchId, finance); expect((await importMigrationBatch(retry.batchId, finance)).successRows).toBe(1); expect((await rollbackMigrationBatch(retry.batchId, finance)).ok).toBe(true);
   });
 
+  it("binds project imports end to end and never leaks rows between projects", async () => {
+    const marker = Date.now();
+    const projectAName = `青岛智能隔离${marker}`;
+    const projectBName = `杭州智能隔离${marker}`;
+    const skuCode = `V172-SKU-${marker}`;
+    const makeProjectFile = (projectName: string) => {
+      const book = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet([{ 产品编码: skuCode, 区域: "大堂", 品类: "饰品", 产品名称: "隔离测试摆件", 数量: 2, 单位: "件", 预算价: 1800, 供应商: "凯特斯雕塑", 采购单号: `PO-${marker}`, 货款: 3600, 增值税: 468, 付款条件: "30%预付" }]), "饰品采购");
+      const bytes = XLSX.write(book, { type: "buffer", bookType: "xlsx" }) as Buffer;
+      return new File([Uint8Array.from(bytes)], `${projectName}SKU表.xlsx`, { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    };
+
+    const uploadA = await createMigrationWorkbook(makeProjectFile(projectAName), owner);
+    expect(uploadA).toMatchObject({ scope: "PENDING", contextConfirmed: false, projectId: null });
+    expect(uploadA.analysis.projectCandidate?.name).toBe(projectAName);
+    const contextA = await bindMigrationContext({ batchId: uploadA.batchId, scope: "PROJECT", projectName: projectAName, companyId: 1, createProject: true }, owner);
+    expect(contextA).toMatchObject({ scope: "PROJECT", contextConfirmed: true, project: { created: true, companyId: 1 } });
+    const projectAId = Number(contextA.project!.id);
+    expect((await resolveProjectForImport({ projectName: projectAName }, owner)).created).toBe(false);
+
+    const mappingsA = suggestedMappings("skus", uploadA.sheets[0].headers);
+    const stagedA = await stageMigrationBatch({ batchId: uploadA.batchId, sheetId: uploadA.sheets[0].id, businessType: "skus", mappings: mappingsA }, owner);
+    expect(stagedA).toMatchObject({ ready: 1, warning: 0, error: 0, total: 1 });
+    const reviewA = await getMigrationBatch(uploadA.batchId, owner);
+    for (const fact of reviewA.facts.filter((item) => item.status === "REQUIRES_CONFIRMATION")) await reviewBusinessFact(uploadA.batchId, Number(fact.id), "ACCEPT", owner);
+    await confirmMigrationBatch(uploadA.batchId, owner);
+    expect((await importMigrationBatch(uploadA.batchId, owner)).successRows).toBe(1);
+
+    const [bindingA] = await sqlQuery<{ batchProject: number; fileProject: number; sheetProject: number; stagingProject: number; factMismatch: number; lineageProject: number; skuProject: number }>(`SELECT b.project_id AS "batchProject",f.project_id AS "fileProject",s.project_id AS "sheetProject",r.project_id AS "stagingProject",(SELECT count(*)::int FROM import_business_facts bf WHERE bf.batch_id=b.id AND bf.project_id<>b.project_id) AS "factMismatch",l.project_id AS "lineageProject",k.project_id AS "skuProject" FROM import_batches b JOIN import_files f ON f.batch_id=b.id JOIN import_sheets s ON s.batch_id=b.id JOIN import_staging_rows r ON r.batch_id=b.id JOIN import_data_lineage l ON l.batch_id=b.id JOIN skus k ON k.id=l.target_id AND l.target_table='skus' WHERE b.id=$1 LIMIT 1`, [uploadA.batchId]);
+    expect(bindingA).toEqual({ batchProject: projectAId, fileProject: projectAId, sheetProject: projectAId, stagingProject: projectAId, factMismatch: 0, lineageProject: projectAId, skuProject: projectAId });
+    expect((await getProjectSections(projectAId, "source-files"))[0].rows).toHaveLength(1);
+    expect((await getProjectSections(projectAId, "imports"))[0].rows).toHaveLength(1);
+
+    const uploadB = await createMigrationWorkbook(makeProjectFile(projectBName), owner);
+    const contextB = await bindMigrationContext({ batchId: uploadB.batchId, scope: "PROJECT", projectName: projectBName, companyId: 1, createProject: true }, owner);
+    const projectBId = Number(contextB.project!.id);
+    const stagedB = await stageMigrationBatch({ batchId: uploadB.batchId, sheetId: uploadB.sheets[0].id, businessType: "skus", mappings: suggestedMappings("skus", uploadB.sheets[0].headers) }, owner);
+    expect(stagedB).toMatchObject({ ready: 1, error: 0 });
+    const [isolation] = await sqlQuery<{ wrongSku: number; wrongStaging: number }>(`SELECT (SELECT count(*)::int FROM skus WHERE code=$1 AND project_id=$2) AS "wrongSku",(SELECT count(*)::int FROM import_staging_rows WHERE batch_id=$3 AND project_id<>$2) AS "wrongStaging"`, [skuCode, projectBId, uploadB.batchId]);
+    expect(isolation).toEqual({ wrongSku: 0, wrongStaging: 0 });
+
+    const conflictUpload = await createMigrationWorkbook(makeProjectFile(`北京智能冲突${marker}`), owner);
+    const conflict = await bindMigrationContext({ batchId: conflictUpload.batchId, scope: "PROJECT", projectId: projectAId }, owner);
+    expect(conflict).toMatchObject({ contextConfirmed: false, conflict: { currentProject: projectAName, level: "CONFLICT" } });
+    await expect(stageMigrationBatch({ batchId: conflictUpload.batchId, sheetId: conflictUpload.sheets[0].id, businessType: "skus", mappings: suggestedMappings("skus", conflictUpload.sheets[0].headers) }, owner)).rejects.toThrow("PROJECT_CONFLICT");
+  });
+
   it("scans allowed folders read-only and detects unchanged, updated and duplicate files", async () => {
     const root = process.env.IMPORT_ALLOWED_ROOTS!; await mkdir(root, { recursive: true });
     const makeBytes = (marker: string) => {
@@ -274,7 +321,7 @@ describe.sequential("business workflow integration", () => {
     const sourcePath = join(root, `scan-${Date.now()}.xlsx`); const original = makeBytes("ORIGINAL"); await writeFile(sourcePath, original);
     const first = await createMigrationWorkbook(new File([original], sourcePath.slice(sourcePath.lastIndexOf(sep) + 1)), owner, { channel: "FOLDER", sourcePath, modifiedAt: new Date() });
     expect(first.fingerprintStatus).toBe("NEW");
-    const unchanged = await scanImportFolder({ folderPath: root }, owner); expect(unchanged.files.find((file) => file.path === sourcePath)?.status).toBe("UNCHANGED");
+    const unchanged = await scanImportFolder({ folderPath: root }, owner); expect(unchanged.files.find((file) => file.path === sourcePath)?.status).toBe("UNCHANGED"); expect(unchanged.projectGroups.length).toBeGreaterThan(0);
 
     const updatedBytes = makeBytes("UPDATED"); await writeFile(sourcePath, updatedBytes);
     const updated = await scanImportFolder({ folderPath: root }, owner); expect(updated.files.find((file) => file.path === sourcePath)?.status).toBe("UPDATED");

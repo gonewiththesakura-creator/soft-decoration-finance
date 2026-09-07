@@ -21,9 +21,10 @@ function csvFile(marker: string, filename = `${marker}.csv`) {
   return new File([`供应商,品名,报价\n供应商-${marker},产品-${marker},1200\n`], filename, { type: "text/csv" });
 }
 
-function uploadRequest(files: File[], idempotencyKey?: string, suppliedToken = token) {
+function uploadRequest(files: File[], idempotencyKey?: string, suppliedToken = token, fields: Record<string, string> = {}) {
   const form = new FormData();
   for (const file of files) form.append("files", file);
+  for (const [key, value] of Object.entries(fields)) form.set(key, value);
   const headers: Record<string, string> = { Authorization: `Bearer ${suppliedToken}`, "X-Forwarded-For": "127.0.0.77" };
   if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
   return new Request(`${base}/files`, { method: "POST", headers, body: form });
@@ -58,6 +59,12 @@ describe.sequential("V1.7.1 external real-data ingest", () => {
     const response = await ingestFiles(uploadRequest([csvFile("demo-mode")]));
     expect(response.status).toBe(409);
     expect((await payload(response)).error).toBe("DATA_MODE_NOT_REAL");
+  });
+
+  it("requires an explicit project context for project-scoped API uploads", async () => {
+    const response = await ingestFiles(uploadRequest([xlsxFile("PROJECT-CONTEXT")], "project-context-required-001", token, { scope: "PROJECT" }));
+    expect(response.status).toBe(400);
+    expect(await payload(response)).toMatchObject({ error: "PROJECT_CONTEXT_REQUIRED" });
   });
 
   it("stages XLSX with classifications and never writes business tables", async () => {

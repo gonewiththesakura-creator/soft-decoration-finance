@@ -12,6 +12,7 @@ function scopeClause(scope: number | null, alias: string, user: SessionUser, pro
 }
 
 export async function getDashboardData(user: SessionUser, scope: number | null) {
+  const [baseline] = await sqlQuery<{ companyCount: number }>(`SELECT count(*)::int AS "companyCount" FROM companies`);
   const projectScope = scopeClause(scope, "p", user, "p.id");
   const restrictedProjects = user.role === "project_manager" || user.role === "designer";
   const balanceAccessible = user.role === "owner" || user.role === "finance";
@@ -126,5 +127,6 @@ export async function getDashboardData(user: SessionUser, scope: number | null) 
     `SELECT s.id AS "supplierId",s.name AS "supplierName",sum(GREATEST(y.amount_cents-COALESCE((SELECT sum(ia.amount_cents) FROM invoice_allocations ia WHERE ia.payable_id=y.id),0),0))::float8 AS "amountCents",count(*)::int AS "payableCount" FROM payables y JOIN suppliers s ON s.id=y.supplier_id WHERE ${missingScope.sql} AND NOT y.is_void GROUP BY s.id,s.name HAVING sum(GREATEST(y.amount_cents-COALESCE((SELECT sum(ia.amount_cents) FROM invoice_allocations ia WHERE ia.payable_id=y.id),0),0))>0 ORDER BY "amountCents" DESC LIMIT 5`, missingScope.params,
   ) : [];
   const [scopeCompany] = scope === null ? [] : await sqlQuery<{ name: string }>(`SELECT name FROM companies WHERE id=$1`, [scope]);
-  return { summary, balances, overBudget, cashflow, pending, overdue, missingInvoiceSuppliers, scopeLabel: scopeCompany?.name ?? "集团汇总 · 全部公司" };
+  const isEmpty = Number(baseline.companyCount) === 0;
+  return { isEmpty, summary, balances, overBudget, cashflow, pending, overdue, missingInvoiceSuppliers, scopeLabel: isEmpty ? "尚未导入公司数据" : scopeCompany?.name ?? "集团汇总 · 全部公司" };
 }

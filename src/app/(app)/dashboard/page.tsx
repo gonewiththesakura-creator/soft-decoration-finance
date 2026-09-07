@@ -18,6 +18,7 @@ import { ExecutiveAmbientBackground } from "@/components/executive/executive-amb
 import { formatDate, formatMoney, getStatusTone } from "@/lib/format";
 import { can } from "@/lib/permissions";
 import { getAIConfig } from "@/ai/config";
+import { EmptyBusinessState } from "@/components/empty-business-state";
 
 function greetingForShanghai() {
   const hour = Number(new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", hour12: false, timeZone: "Asia/Shanghai" }).format(new Date()).slice(0, 2));
@@ -31,6 +32,7 @@ export default async function DashboardPage() {
   const user = await requireSession();
   const scope = await getCompanyScope(user);
   const data = await getDashboardData(user, scope);
+  if (data.isEmpty) return <ExecutiveAmbientBackground><main className="content operating-page executive-dashboard os-page-enter"><EmptyBusinessState canImport={can(user, "imports", "write")} canScan={user.role === "owner"} description="先导入公司、项目、供应商与财务资料，驾驶舱才会开始计算余额、风险和现金流。" /></main></ExecutiveAmbientBackground>;
   const analytics = await getDashboardAnalytics(user, scope, data.summary.balance);
   const projectedBalance = data.summary.balanceAccessible ? analytics.cashflow.at(-1)?.balanceCents ?? data.summary.balance : null;
   const firstGap = analytics.cashflow.find((point) => point.balanceCents < 0);

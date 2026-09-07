@@ -4,7 +4,7 @@
 
 ## 当前能力
 
-- 3 家公司独立核算及集团汇总切换
+- 真实数据模式默认空库启动；公司数据导入后自动启用独立核算与集团汇总
 - 老板、财务、采购、项目经理、设计师五类角色
 - 公司作用域与项目成员作用域的服务端数据隔离
 - 项目 → 合同 → 应收 → SKU → 报价 → 采购申请 → 审批 → 采购单 → 应付 → 付款 → 收款 → 发票主链路
@@ -13,7 +13,7 @@
 - 收款登记、应收余额与账户余额联动
 - 项目经营总账、质保金独立状态、预算版本、退货冲减及操作日志
 - V1.5 老板经营驾驶舱：现金流预测、行动中心、项目健康度、资金结构、账龄与到期分析
-- 数据迁移中心：日常标准导入、历史多 Sheet、字段 Mapping、名称解析、暂存预检、批次血缘和安全撤销
+- V1.7 数据迁移中心：多文件上传、受限文件夹扫描、SHA-256 指纹与版本、Sheet 分类、字段 Mapping、暂存预检、证据血缘和安全撤销
 - Real AI Core：OpenAI-compatible Provider、24 个只读业务工具、多轮对话、全局 Copilot、页面上下文分析、数字溯源、限流与完整运行审计
 
 ## 技术架构
@@ -35,20 +35,23 @@
 ```bash
 npm install
 Copy-Item .env.example .env.local
-npm run db:seed
+npm run db:bootstrap
 npm run dev
 ```
 
 打开 [http://localhost:3000](http://localhost:3000)。`npm run dev` 会同时启动唯一数据库服务和 Next.js，不要单独执行 `next dev`。
 
-如数据库已有 Seed Data，`npm run db:seed` 会安全跳过。重置前应先停止应用：
+`DATA_MODE` 默认是 `real`。真实模式首次启动只创建老板管理员，不创建公司、项目、账户或财务记录。生产空库必须在 `.env.local` 设置 `BOOTSTRAP_OWNER_NAME`、`BOOTSTRAP_OWNER_EMAIL` 和强密码 `BOOTSTRAP_OWNER_PASSWORD`。
 
-```bash
-npm run db:reset
-npm run db:seed
+如需在隔离环境查看演示数据，必须显式切换模式：
+
+```powershell
+$env:DATA_MODE="demo"
+npm run db:reset:demo
+npm run db:seed:demo
 ```
 
-## 测试账号
+## 演示模式账号
 
 所有 Seed 账号密码均为 `Demo@2026`。
 
@@ -60,7 +63,7 @@ npm run db:seed
 | 项目经理 | `project_manager15@zhiheng.local` | 上海织衡且仅参与项目 |
 | 设计师 | `designer16@zhiheng.local` | 上海织衡且仅参与项目 |
 
-正式使用前必须更换 Seed 密码与 `AUTH_SECRET`。
+这些账号只由 `db:seed:demo` 创建，真实模式不会创建。正式使用必须设置强 `AUTH_SECRET` 与独立管理员密码。
 
 ## 常用命令
 
@@ -75,12 +78,15 @@ npm run typecheck    # TypeScript 检查
 npm run lint         # ESLint
 npm run ai:compat    # 完整 Provider 八项兼容性测试（需要服务端密钥）
 npm run ai:smoke     # AI 真实连接、工具、流式与结构化输出烟测
-npm run db:seed      # 初始化关联演示数据
-npm run db:reset     # 清空并重建本地 Schema（先停止应用）
+npm run db:bootstrap # 空库仅初始化老板管理员
+npm run db:seed      # db:bootstrap 的兼容别名，不写入 Demo 业务数据
+npm run db:seed:demo # 仅 DATA_MODE=demo 的隔离环境初始化演示数据
+npm run data:reset-real # 备份后清空业务/导入数据，需输入精确确认短语
+npm run db:reset:demo   # 仅 DATA_MODE=demo 的 Schema 重建
 npm run templates:generate # 重新生成标准模板和 5 套迁移测试工作簿
 ```
 
-## 数据规模
+## 演示数据规模
 
 Seed 包含 3 家公司、6 个公司账户、22 个用户、24 个客户、48 个供应商、12 个项目、360 个 SKU、840 份报价、180 笔采购申请、108+ 采购单/应付、129 笔付款、60 笔收款和 144 张发票。所有页面与 Dashboard 从同一数据库聚合，不使用页面级假数据。
 
@@ -109,6 +115,7 @@ docs/                    权限、测试、部署与版本状态
 - [部署说明](docs/DEPLOYMENT.md)
 - [Windows 运行稳定性](docs/RUNTIME-STABILITY.md)
 - [数据迁移中心](docs/DATA-MIGRATION.md)
+- [V1.7 真实数据试点](docs/V1.7-REAL-DATA-PILOT.md)
 - [AI 架构](docs/AI-ARCHITECTURE.md)
 - [AI Provider 兼容性](docs/AI-PROVIDER-COMPATIBILITY.md)
 - [AI 工具清单](docs/AI-TOOLS.md)

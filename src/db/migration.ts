@@ -290,4 +290,82 @@ END
 $migration$;
 `;
 
-export const INITIAL_MIGRATION = BASE_SCHEMA + FINANCIAL_NUMERIC_MIGRATION + BUSINESS_ATTACHMENT_MIGRATION + AUTH_SECURITY_MIGRATION + IMPORT_SAFETY_MIGRATION + INVOICE_ALLOCATION_MIGRATION + ATTACHMENT_SYSTEM_MIGRATION + DATA_MIGRATION_CENTER_MIGRATION + IMPORT_SCOPE_MIGRATION + AI_CORE_MIGRATION + AI_HARDENING_MIGRATION;
+export const REAL_DATA_PILOT_MIGRATION = String.raw`
+DO $migration$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = '0011_real_data_pilot') THEN
+    CREATE TABLE import_source_groups (
+      id serial PRIMARY KEY,
+      group_key text NOT NULL UNIQUE,
+      project_hint text,
+      first_seen_at timestamptz NOT NULL DEFAULT now(),
+      last_seen_at timestamptz NOT NULL DEFAULT now()
+    );
+    ALTER TABLE import_files ADD COLUMN source_group_id integer REFERENCES import_source_groups(id);
+    ALTER TABLE import_files ADD COLUMN source_path text;
+    ALTER TABLE import_files ADD COLUMN extension text;
+    ALTER TABLE import_files ADD COLUMN modified_at timestamptz;
+    ALTER TABLE import_files ADD COLUMN workbook_structure jsonb NOT NULL DEFAULT '{}'::jsonb;
+    ALTER TABLE import_files ADD COLUMN fingerprint_status text NOT NULL DEFAULT 'NEW';
+    ALTER TABLE import_files ADD COLUMN managed_storage_key text;
+    ALTER TABLE import_files ADD COLUMN version_number integer NOT NULL DEFAULT 1;
+    ALTER TABLE import_files ADD COLUMN is_current boolean NOT NULL DEFAULT true;
+    ALTER TABLE import_files ADD COLUMN channel text NOT NULL DEFAULT 'UPLOAD';
+    CREATE INDEX import_files_hash_idx ON import_files(file_hash);
+    CREATE INDEX import_files_source_path_idx ON import_files(source_path);
+    CREATE INDEX import_files_group_version_idx ON import_files(source_group_id, version_number DESC);
+
+    ALTER TABLE import_sheets ADD COLUMN classification text NOT NULL DEFAULT 'UNKNOWN';
+    ALTER TABLE import_sheets ADD COLUMN classification_confidence integer NOT NULL DEFAULT 0;
+    ALTER TABLE import_sheets ADD COLUMN classification_warnings jsonb NOT NULL DEFAULT '[]'::jsonb;
+    ALTER TABLE import_sheets ADD COLUMN is_empty boolean NOT NULL DEFAULT false;
+    ALTER TABLE import_sheets ADD COLUMN structure jsonb NOT NULL DEFAULT '{}'::jsonb;
+
+    CREATE TABLE field_aliases (
+      id serial PRIMARY KEY,
+      company_id integer REFERENCES companies(id),
+      business_type text NOT NULL,
+      source_field text NOT NULL,
+      target_field text NOT NULL,
+      source text NOT NULL DEFAULT 'MANUAL',
+      created_by integer NOT NULL REFERENCES users(id),
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE UNIQUE INDEX field_alias_scope_idx ON field_aliases(company_id, business_type, source_field, target_field);
+
+    ALTER TABLE import_data_lineage ADD COLUMN source_file_id integer REFERENCES import_files(id);
+    ALTER TABLE import_data_lineage ADD COLUMN source_sheet_id integer REFERENCES import_sheets(id);
+    ALTER TABLE import_data_lineage ADD COLUMN source_column text;
+    ALTER TABLE import_data_lineage ADD COLUMN source_cell text;
+    ALTER TABLE import_data_lineage ADD COLUMN mapping_rule_id integer REFERENCES import_mapping_templates(id);
+    ALTER TABLE import_data_lineage ADD COLUMN evidence_role text NOT NULL DEFAULT 'PRIMARY';
+
+    CREATE TABLE import_business_facts (
+      id serial PRIMARY KEY,
+      batch_id integer NOT NULL REFERENCES import_batches(id),
+      fact_type text NOT NULL,
+      business_key text NOT NULL,
+      payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE(batch_id, fact_type, business_key)
+    );
+    CREATE TABLE import_business_fact_evidence (
+      id serial PRIMARY KEY,
+      fact_id integer NOT NULL REFERENCES import_business_facts(id) ON DELETE CASCADE,
+      file_id integer NOT NULL REFERENCES import_files(id),
+      sheet_id integer NOT NULL REFERENCES import_sheets(id),
+      source_row integer NOT NULL,
+      source_column text,
+      source_cell text,
+      evidence_role text NOT NULL DEFAULT 'SUPPORTING',
+      raw_value text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX import_fact_evidence_fact_idx ON import_business_fact_evidence(fact_id);
+    INSERT INTO schema_migrations(version) VALUES ('0011_real_data_pilot');
+  END IF;
+END
+$migration$;
+`;
+
+export const INITIAL_MIGRATION = BASE_SCHEMA + FINANCIAL_NUMERIC_MIGRATION + BUSINESS_ATTACHMENT_MIGRATION + AUTH_SECURITY_MIGRATION + IMPORT_SAFETY_MIGRATION + INVOICE_ALLOCATION_MIGRATION + ATTACHMENT_SYSTEM_MIGRATION + DATA_MIGRATION_CENTER_MIGRATION + IMPORT_SCOPE_MIGRATION + AI_CORE_MIGRATION + AI_HARDENING_MIGRATION + REAL_DATA_PILOT_MIGRATION;

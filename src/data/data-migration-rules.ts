@@ -79,8 +79,12 @@ export const migrationDefinitions: MigrationDefinition[] = importDefinitions.map
     aliases: Array.from(new Set([
       field.label, field.label.replace(/\(元\)|\(%\)/g, ""), ...(aliases[field.key] ?? []),
       ...(definition.resource === "customers" && field.key === "name" ? ["客户", "甲方", "客户单位", "业主单位"] : []),
+      ...(definition.resource === "customers" && field.key === "code" ? ["客户编码", "客户编号"] : []),
       ...(definition.resource === "suppliers" && field.key === "name" ? ["供应商", "厂家", "供货商", "厂商"] : []),
+      ...(definition.resource === "suppliers" && field.key === "code" ? ["供应商编码", "供应商编号", "厂商编码"] : []),
       ...(definition.resource === "projects" && field.key === "name" ? ["项目", "工程名称"] : []),
+      ...(definition.resource === "projects" && field.key === "code" ? ["项目编码", "项目编号", "工程编码", "工程编号"] : []),
+      ...(definition.resource === "skus" && field.key === "code" ? ["SKU", "SKU编码", "产品编码", "物料编码", "货号"] : []),
     ])),
   })),
 }));

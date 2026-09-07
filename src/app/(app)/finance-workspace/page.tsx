@@ -11,6 +11,7 @@ import { getFinanceAnalytics } from "@/data/analytics/finance";
 import { getCompanyScope, requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { formatDate, formatMoney, getStatusTone } from "@/lib/format";
+import { EmptyBusinessState } from "@/components/empty-business-state";
 
 type Item = Record<string, unknown> & { id: number; kind: string; priority: string };
 
@@ -20,6 +21,7 @@ export default async function FinanceWorkspacePage({ searchParams }: { searchPar
   const selected = await getCompanyScope(user);
   const focusDate = /^\d{4}-\d{2}-\d{2}$/.test(query.date ?? "") ? query.date : undefined;
   const data = await getFinanceWorkspace(user, selected, focusDate);
+  if (data.isEmpty) return <main className="content operating-page finance-os os-page-enter"><EmptyBusinessState canImport={can(user, "imports", "write")} canScan={user.role === "owner"} title="尚未形成真实财务账" description="导入公司账户、项目应收与采购应付后，现金余额和到期结构才会参与计算。" /></main>;
   const analytics = await getFinanceAnalytics(user, selected, data.summary.balance);
   const todayActions = ([...data.payments, ...data.receivables, ...data.payables] as Item[]).filter((item) => !focusDate || String(item.dueDate).slice(0, 10) === focusDate).sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate))).slice(0, 6);
   const firstGap = analytics.cashflow.find((point) => point.balanceCents < 0);

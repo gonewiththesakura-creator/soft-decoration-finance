@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { hash } from "bcryptjs";
 import { directDb as db, ensureDirectDatabase as ensureDatabase, directQuery as sqlQuery } from "../src/db/direct";
+import { getDataMode } from "../src/lib/data-mode";
 import {
   auditLogs,
   companies,
@@ -39,11 +40,12 @@ const dateAt = (days: number) => new Date(now.getTime() + days * DAY);
 const yuan = (value: number) => Math.round(value * 100);
 
 async function seed() {
+  if (getDataMode() !== "demo") throw new Error("Demo seed requires DATA_MODE=demo. Real mode never inserts demonstration business data.");
   if (process.env.NODE_ENV === "production" && process.env.ALLOW_DEMO_SEED !== "true") throw new Error("Demo seed is disabled in production. Set ALLOW_DEMO_SEED=true only for an isolated demonstration environment.");
   await ensureDatabase();
   const [{ count }] = await sqlQuery<{ count: number }>("SELECT count(*)::int AS count FROM companies");
   if (count > 0) {
-    console.log("Database already contains seed data. Run npm run db:reset to rebuild it.");
+    console.log("Database already contains seed data. Run npm run db:reset:demo to rebuild it.");
     return;
   }
 
@@ -54,7 +56,8 @@ async function seed() {
   ]).returning();
 
   const passwordHash = await hash("Demo@2026", 10);
-  const userValues: typeof users.$inferInsert[] = [
+  const [existingOwner] = await sqlQuery<{ id: number }>("SELECT id FROM users WHERE role='owner' ORDER BY id LIMIT 1");
+  const userValues: typeof users.$inferInsert[] = existingOwner ? [] : [
     { companyId: null, name: "陈屿", email: "owner@zhiheng.local", passwordHash, role: "owner" },
   ];
   const roleNames = [
@@ -74,7 +77,8 @@ async function seed() {
     });
   });
   const userRows = await db.insert(users).values(userValues).returning();
-  const owner = userRows[0];
+  const owner = existingOwner ?? userRows.find((row) => row.role === "owner");
+  if (!owner) throw new Error("Demo seed could not resolve the owner account.");
 
   const accountValues: typeof companyAccounts.$inferInsert[] = [];
   companyRows.forEach((company, i) => {

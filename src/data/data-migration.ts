@@ -1,13 +1,17 @@
 import { createHash } from "node:crypto";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { extname, resolve } from "node:path";
 import * as XLSX from "xlsx";
 import { runTransaction, sqlQuery, type TransactionStatement } from "@/db/client";
 import type { SessionUser } from "@/lib/auth";
 import { assertCan, type ResourceKey } from "@/lib/permissions";
+import { isRealDataMode } from "@/lib/data-mode";
 import { importRowsAtomic, preflightImport, type MigrationLineageInput } from "./excel-import";
 import {
   applyFieldMapping, duplicateRules, migrationDefinition, normalizeHeader, sheetSignature, suggestFieldMappings,
   validateMigrationRow, type MigrationIssue, type ReferenceEntity,
 } from "./data-migration-rules";
+import { buildBusinessFacts, parseWorkbook, sourceGroupKey, type FingerprintStatus } from "./import-pilot";
 
 type Candidate = { id: number; companyId: number | null; name: string; code: string; aliases: string[] };
 export type ResolutionStatus = "EXACT_MATCH" | "POSSIBLE_MATCH" | "NOT_FOUND" | "MULTIPLE_MATCHES";
@@ -87,33 +91,57 @@ async function nextBatchNumber() {
   return `IMP-${day}-${String(Number(row.count) + 1).padStart(4, "0")}`;
 }
 
-export async function createMigrationWorkbook(file: File, user: SessionUser) {
+export async function createMigrationWorkbook(file: File, user: SessionUser, options: { channel?: "UPLOAD" | "FOLDER"; sourcePath?: string; modifiedAt?: Date } = {}) {
   assertCan(user, "imports", "write");
-  if (!/\.xlsx?$/i.test(file.name)) throw new Error("仅支持 .xlsx / .xls 文件");
+  if (!/\.(xlsx|xls|csv)$/i.test(file.name)) throw new Error("仅支持 .xlsx / .xls / .csv 文件");
   if (file.size > 30 * 1024 * 1024) throw new Error("历史迁移文件不能超过 30MB");
   const bytes = Buffer.from(await file.arrayBuffer()); const fileHash = createHash("sha256").update(bytes).digest("hex");
-  const book = XLSX.read(bytes, { type: "buffer", cellDates: false });
-  if (!book.SheetNames.length) throw new Error("工作簿中没有 Sheet");
-  const sheets = book.SheetNames.map((name, index) => {
-    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(book.Sheets[name], { defval: "", raw: true });
-    if (rows.length > 10_000) throw new Error(`Sheet“${name}”超过 10,000 行，请拆分后迁移`);
-    const headers = rows.length ? Object.keys(rows[0]) : [];
-    return { index, name, rows, headers, rowCount: rows.length, columnCount: headers.length, previewRows: rows.slice(0, 10), signature: sheetSignature(headers) };
-  });
+  const sheets = parseWorkbook(bytes, file.name).map((sheet) => ({ ...sheet, signature: sheetSignature(sheet.headers) }));
+  const facts = buildBusinessFacts(sheets);
   const batchNumber = await nextBatchNumber();
-  const duplicate = await sqlQuery<{ batchNumber: string }>(`SELECT batch_number AS "batchNumber" FROM import_batches WHERE source_hash=$1 AND status='COMPLETED' LIMIT 1`, [fileHash]);
+  const groupKey = sourceGroupKey(file.name) || fileHash;
+  const [sourceGroup] = await sqlQuery<{ id: number }>(`INSERT INTO import_source_groups(group_key,project_hint) VALUES($1,$2) ON CONFLICT(group_key) DO UPDATE SET last_seen_at=now() RETURNING id`, [groupKey, file.name.replace(/\.(xlsx|xls|csv)$/i, "")]);
+  const [pathMatch] = options.sourcePath ? await sqlQuery<{ fileHash: string; batchNumber: string; versionNumber: number }>(`SELECT f.file_hash AS "fileHash",b.batch_number AS "batchNumber",f.version_number AS "versionNumber" FROM import_files f JOIN import_batches b ON b.id=f.batch_id WHERE lower(f.source_path)=lower($1) ORDER BY f.created_at DESC LIMIT 1`, [options.sourcePath]) : [];
+  const [hashMatch] = await sqlQuery<{ batchNumber: string; versionNumber: number }>(`SELECT b.batch_number AS "batchNumber",f.version_number AS "versionNumber" FROM import_files f JOIN import_batches b ON b.id=f.batch_id WHERE f.file_hash=$1 ORDER BY f.created_at DESC LIMIT 1`, [fileHash]);
+  const fingerprintStatus: FingerprintStatus = pathMatch?.fileHash === fileHash ? "UNCHANGED" : hashMatch ? "DUPLICATE" : pathMatch ? "UPDATED" : "NEW";
+  const [version] = await sqlQuery<{ versionNumber: number }>(`SELECT COALESCE(max(version_number),0)::int AS "versionNumber" FROM import_files WHERE source_group_id=$1`, [sourceGroup.id]);
+  const versionNumber = fingerprintStatus === "UNCHANGED" || fingerprintStatus === "DUPLICATE" ? Number(pathMatch?.versionNumber ?? hashMatch?.versionNumber ?? 1) : Number(version.versionNumber) + 1;
+  const isCurrent = fingerprintStatus === "NEW" || fingerprintStatus === "UPDATED";
+  const safeFilename = file.name.replace(/[^\p{L}\p{N}._-]+/gu, "_");
+  const storageKey = `${batchNumber}/${safeFilename}`;
+  const storagePath = resolve(process.env.IMPORT_STORAGE_DIR ?? "./data/imports", storageKey);
+  await mkdir(resolve(storagePath, ".."), { recursive: true });
+  await writeFile(storagePath, bytes, { flag: "wx" });
+  const workbookStructure = { filename: file.name, sheetCount: sheets.length, sheets: sheets.map((sheet) => ({ name: sheet.name, rows: sheet.rowCount, columns: sheet.columnCount, headerRow: sheet.headerRow, classification: sheet.classification })) };
   const statements: TransactionStatement[] = [
     { query: `INSERT INTO import_batches(batch_number,company_id,user_id,source_hash,status) VALUES($1,$2,$3,$4,'UPLOADED') RETURNING id`, params: [batchNumber, user.companyId, user.id, fileHash] },
-    { query: `INSERT INTO import_files(batch_id,filename,file_size,file_hash,sheet_count) VALUES($1,$2,$3,$4,$5) RETURNING id`, params: [{ fromResult: 0, key: "id" }, file.name, file.size, fileHash, sheets.length] },
+    { query: `INSERT INTO import_files(batch_id,source_group_id,filename,source_path,extension,file_size,file_hash,modified_at,workbook_structure,fingerprint_status,managed_storage_key,version_number,is_current,channel,sheet_count) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15) RETURNING id`, params: [{ fromResult: 0, key: "id" }, sourceGroup.id, file.name, options.sourcePath ?? null, extname(file.name).toLowerCase(), file.size, fileHash, options.modifiedAt ?? null, JSON.stringify(workbookStructure), fingerprintStatus, storageKey, versionNumber, isCurrent, options.channel ?? "UPLOAD", sheets.length] },
   ];
-  for (const sheet of sheets) statements.push({ query: `INSERT INTO import_sheets(batch_id,file_id,sheet_index,name,row_count,column_count,headers,preview_rows,raw_rows) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb) RETURNING id`, params: [{ fromResult: 0, key: "id" }, { fromResult: 1, key: "id" }, sheet.index, sheet.name, sheet.rowCount, sheet.columnCount, JSON.stringify(sheet.headers), JSON.stringify(sheet.previewRows), JSON.stringify(sheet.rows)] });
-  const results = await runTransaction<{ id: number }>(statements); const batchId = Number(results[0][0].id);
+  for (const sheet of sheets) statements.push({ query: `INSERT INTO import_sheets(batch_id,file_id,sheet_index,name,row_count,column_count,headers,preview_rows,raw_rows,classification,classification_confidence,classification_warnings,is_empty,structure) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10,$11,$12::jsonb,$13,$14::jsonb) RETURNING id`, params: [{ fromResult: 0, key: "id" }, { fromResult: 1, key: "id" }, sheet.index, sheet.name, sheet.rowCount, sheet.columnCount, JSON.stringify(sheet.headers), JSON.stringify(sheet.previewRows), JSON.stringify(sheet.rows), sheet.classification, sheet.classificationConfidence, JSON.stringify(sheet.classificationWarnings), sheet.isEmpty, JSON.stringify({ headerRow: sheet.headerRow, signature: sheet.signature })] });
+  for (const fact of facts) {
+    const factResultIndex = statements.length;
+    statements.push({ query: `INSERT INTO import_business_facts(batch_id,fact_type,business_key,payload) VALUES($1,$2,$3,$4::jsonb) RETURNING id`, params: [{ fromResult: 0, key: "id" }, fact.factType, fact.businessKey, JSON.stringify(fact.payload)] });
+    for (const evidence of fact.evidence) statements.push({ query: `INSERT INTO import_business_fact_evidence(fact_id,file_id,sheet_id,source_row,source_column,source_cell,evidence_role,raw_value) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, params: [{ fromResult: factResultIndex, key: "id" }, { fromResult: 1, key: "id" }, { fromResult: evidence.sheetIndex + 2, key: "id" }, evidence.sourceRow, evidence.sourceColumn, evidence.sourceCell, evidence.role, evidence.rawValue] });
+  }
+  let results: Record<string, unknown>[][];
+  try { results = await runTransaction<Record<string, unknown>>(statements); }
+  catch (error) { await unlink(storagePath).catch(() => undefined); throw error; }
+  const batchId = Number(results[0][0].id);
+  if (isCurrent) await sqlQuery(`UPDATE import_files SET is_current=(id=$1) WHERE source_group_id=$2`, [Number(results[1][0].id), sourceGroup.id]);
   const templates = await sqlQuery<{ id: number; name: string; businessType: string; signature: string; mappings: Record<string, string> }>(`SELECT id,name,business_type AS "businessType",sheet_signature AS signature,field_mappings AS mappings FROM import_mapping_templates WHERE company_id IS NULL OR company_id=$1`, [user.companyId]);
+  const learnedAliases = await sqlQuery<{ businessType: string; sourceField: string; targetField: string }>(`SELECT business_type AS "businessType",source_field AS "sourceField",target_field AS "targetField" FROM field_aliases WHERE company_id IS NULL OR company_id=$1 ORDER BY created_at DESC`, [user.companyId]);
   return {
     batchId, batchNumber, filename: file.name, fileSize: file.size, sheetCount: sheets.length,
-    duplicateOf: duplicate[0]?.batchNumber ?? null,
-    sheets: sheets.map((sheet, index) => ({ id: Number(results[index + 2][0].id), name: sheet.name, rowCount: sheet.rowCount, columnCount: sheet.columnCount, headers: sheet.headers, previewRows: sheet.previewRows, matchedTemplate: templates.find((template) => template.signature === sheet.signature) ?? null })),
+    fingerprintStatus, versionNumber, sourceGroupKey: groupKey, duplicateOf: (pathMatch ?? hashMatch)?.batchNumber ?? null,
+    sheets: sheets.map((sheet, index) => ({ id: Number(results[index + 2][0].id), name: sheet.name, rowCount: sheet.rowCount, columnCount: sheet.columnCount, headers: sheet.headers, previewRows: sheet.previewRows, classification: sheet.classification, classificationConfidence: sheet.classificationConfidence, classificationWarnings: sheet.classificationWarnings, learnedMappings: Object.fromEntries(migrationDefinitionsForAliases(learnedAliases, sheet.headers)), matchedTemplate: templates.find((template) => template.signature === sheet.signature) ?? null })),
   };
+}
+
+function migrationDefinitionsForAliases(aliases: { businessType: string; sourceField: string; targetField: string }[], headers: string[]) {
+  return [...new Set(aliases.map((alias) => alias.businessType))].map((businessType) => [businessType, Object.fromEntries(headers.flatMap((header) => {
+    const match = aliases.find((alias) => alias.businessType === businessType && alias.sourceField === normalizeHeader(header));
+    return match ? [[header, match.targetField]] : [];
+  }))] as const);
 }
 
 async function existingDuplicates(resource: ResourceKey) {
@@ -127,12 +155,18 @@ async function existingDuplicates(resource: ResourceKey) {
 async function saveMappingTemplate(user: SessionUser, name: string, businessType: ResourceKey, headers: string[], mappings: Record<string, string>) {
   const signature = sheetSignature(headers);
   const [existing] = await sqlQuery<{ id: number }>(`SELECT id FROM import_mapping_templates WHERE business_type=$1 AND sheet_signature=$2 AND (company_id=$3 OR company_id IS NULL) ORDER BY company_id NULLS LAST LIMIT 1`, [businessType, signature, user.companyId]);
+  let templateId: number;
   if (existing) {
     await sqlQuery(`UPDATE import_mapping_templates SET name=$1,source_fields=$2::jsonb,field_mappings=$3::jsonb,updated_at=now(),updated_by=$4 WHERE id=$5`, [name, JSON.stringify(headers), JSON.stringify(mappings), user.id, existing.id]);
-    return Number(existing.id);
+    templateId = Number(existing.id);
+  } else {
+    const [created] = await sqlQuery<{ id: number }>(`INSERT INTO import_mapping_templates(company_id,name,business_type,sheet_signature,source_fields,field_mappings,created_by) VALUES($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7) RETURNING id`, [user.companyId, name, businessType, signature, JSON.stringify(headers), JSON.stringify(mappings), user.id]);
+    templateId = Number(created.id);
   }
-  const [created] = await sqlQuery<{ id: number }>(`INSERT INTO import_mapping_templates(company_id,name,business_type,sheet_signature,source_fields,field_mappings,created_by) VALUES($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7) RETURNING id`, [user.companyId, name, businessType, signature, JSON.stringify(headers), JSON.stringify(mappings), user.id]);
-  return Number(created.id);
+  for (const [sourceField, targetField] of Object.entries(mappings).filter(([, target]) => target)) {
+    await sqlQuery(`INSERT INTO field_aliases(company_id,business_type,source_field,target_field,source,created_by) SELECT $1,$2,$3,$4,'MAPPING_TEMPLATE',$5 WHERE NOT EXISTS (SELECT 1 FROM field_aliases WHERE company_id IS NOT DISTINCT FROM $1 AND business_type=$2 AND source_field=$3 AND target_field=$4)`, [user.companyId, businessType, normalizeHeader(sourceField), targetField, user.id]);
+  }
+  return templateId;
 }
 
 export async function stageMigrationBatch(input: { batchId: number; sheetId: number; businessType: ResourceKey; mappings: Record<string, string>; saveTemplateName?: string }, user: SessionUser) {
@@ -174,7 +208,7 @@ export async function stageMigrationBatch(input: { batchId: number; sheetId: num
       if (duplicates.has(key)) { duplicateStatus = "EXISTING"; duplicateTargetId = duplicates.get(key)!; action = rule.financial ? "SKIP" : "MATCH"; issues.push({ field: rule.field, severity: "WARNING", code: "EXISTING", message: rule.financial ? "财务事实已存在，默认跳过且禁止覆盖" : "基础资料已存在，默认匹配现有记录" }); }
     }
     const status = issues.some((issue) => issue.severity === "ERROR") ? "ERROR" : issues.length ? "WARNING" : "READY";
-    return { sourceRow: index + 2, raw, normalized, issues, resolutions, status, duplicateStatus, duplicateTargetId, action };
+    return { sourceRow: Number(raw.__sourceRow ?? index + 2), raw, normalized, issues, resolutions, status, duplicateStatus, duplicateTargetId, action };
   });
   const eligible = staged.map((row, index) => ({ row, index })).filter(({ row }) => row.action === "CREATE" && !row.issues.some((issue) => issue.severity === "ERROR"));
   if (eligible.length) {
@@ -211,8 +245,8 @@ export async function getMigrationOverview(user: SessionUser) {
 
 export async function getMigrationBatch(batchId: number, user: SessionUser, page = 1) {
   const batch = await requireBatch(batchId, user); const pageSize = 50; const offset = Math.max(0, page - 1) * pageSize;
-  const [file] = await sqlQuery<Record<string, unknown>>(`SELECT filename,file_size AS "fileSize",sheet_count AS "sheetCount" FROM import_files WHERE batch_id=$1`, [batchId]);
-  const sheets = await sqlQuery<Record<string, unknown>>(`SELECT id,name,row_count AS "rowCount",column_count AS "columnCount",headers,preview_rows AS "previewRows",selected FROM import_sheets WHERE batch_id=$1 ORDER BY sheet_index`, [batchId]);
+  const [file] = await sqlQuery<Record<string, unknown>>(`SELECT filename,source_path AS "sourcePath",extension,file_size AS "fileSize",sheet_count AS "sheetCount",fingerprint_status AS "fingerprintStatus",version_number AS "versionNumber",channel,managed_storage_key AS "managedStorageKey" FROM import_files WHERE batch_id=$1`, [batchId]);
+  const sheets = await sqlQuery<Record<string, unknown>>(`SELECT id,name,row_count AS "rowCount",column_count AS "columnCount",headers,preview_rows AS "previewRows",classification,classification_confidence AS "classificationConfidence",classification_warnings AS "classificationWarnings",is_empty AS "isEmpty",selected FROM import_sheets WHERE batch_id=$1 ORDER BY sheet_index`, [batchId]);
   const rows = await sqlQuery<Record<string, unknown>>(`SELECT id,source_row AS "sourceRow",normalized_data AS "normalizedData",issues,duplicate_status AS "duplicateStatus",duplicate_target_id AS "duplicateTargetId",action,status,target_table AS "targetTable",target_id AS "targetId" FROM import_staging_rows WHERE batch_id=$1 ORDER BY source_row LIMIT $2 OFFSET $3`, [batchId, pageSize, offset]);
   const resolutions = await sqlQuery<Record<string, unknown>>(`SELECT x.id,x.staging_row_id AS "stagingRowId",x.field_key AS "fieldKey",x.entity_type AS "entityType",x.input_value AS "inputValue",x.status,x.resolved_entity_id AS "resolvedEntityId",x.candidates FROM import_reference_resolutions x WHERE x.staging_row_id IN (SELECT id FROM import_staging_rows WHERE batch_id=$1 ORDER BY source_row LIMIT $2 OFFSET $3) AND x.status<>'EXACT_MATCH' ORDER BY x.staging_row_id,x.id`, [batchId, pageSize, offset]);
   const [blocking] = await sqlQuery<{ unresolved: number }>(`SELECT count(*)::int AS unresolved FROM import_reference_resolutions x JOIN import_staging_rows r ON r.id=x.staging_row_id WHERE x.batch_id=$1 AND x.status<>'EXACT_MATCH' AND r.action<>'SKIP'`, [batchId]);
@@ -266,24 +300,29 @@ export async function updateStagingRow(batchId: number, rowId: number, input: { 
   await sqlQuery(`UPDATE import_batches b SET ready_rows=x.ready,warning_rows=x.warning,error_rows=x.error,updated_at=now() FROM (SELECT count(*) FILTER (WHERE status='READY')::int AS ready,count(*) FILTER (WHERE status='WARNING')::int AS warning,count(*) FILTER (WHERE status='ERROR')::int AS error FROM import_staging_rows WHERE batch_id=$1) x WHERE b.id=$1`, [batchId]);
 }
 
-export async function confirmMigrationBatch(batchId: number, user: SessionUser) {
+export async function confirmMigrationBatch(batchId: number, user: SessionUser, confirmation?: string) {
   const batch = await requireBatch(batchId, user); assertCan(user, "imports", "write");
+  if (isRealDataMode() && confirmation !== "确认导入真实数据") throw new Error("请输入“确认导入真实数据”后再继续");
   if (String(batch.status) !== "VALIDATED") throw new Error("当前批次不处于人工确认阶段");
   const [blocking] = await sqlQuery<{ errors: number; unresolved: number }>(`SELECT (SELECT count(*)::int FROM import_staging_rows WHERE batch_id=$1 AND status='ERROR' AND action<>'SKIP') AS errors,(SELECT count(*)::int FROM import_reference_resolutions x JOIN import_staging_rows r ON r.id=x.staging_row_id WHERE x.batch_id=$1 AND x.status<>'EXACT_MATCH' AND r.action<>'SKIP') AS unresolved`, [batchId]);
   if (Number(blocking.errors) > 0) throw new Error("仍有红色错误，不能确认导入");
   if (Number(blocking.unresolved) > 0) throw new Error("仍有关联候选未逐项确认，请先完成选择或跳过对应行");
-  await runTransaction([{ query: `UPDATE import_staging_rows SET status='CONFIRMED',updated_at=now() WHERE batch_id=$1 AND status='WARNING'`, params: [batchId] }, { query: `UPDATE import_batches SET confirmed_at=now(),status='READY_TO_IMPORT',updated_at=now() WHERE id=$1`, params: [batchId] }]);
+  await runTransaction([
+    { query: `UPDATE import_staging_rows SET status='CONFIRMED',updated_at=now() WHERE batch_id=$1 AND status='WARNING'`, params: [batchId] },
+    { query: `UPDATE import_batches SET confirmed_at=now(),status='READY_TO_IMPORT',updated_at=now() WHERE id=$1`, params: [batchId] },
+    { query: `INSERT INTO audit_logs(company_id,user_id,object_type,object_id,action,after,ip) VALUES($1,$2,'import_batch',$3,'CONFIRM_REAL_IMPORT',jsonb_build_object('batch_number',$4::text),'127.0.0.1')`, params: [batch.company_id, user.id, batchId, batch.batch_number] },
+  ]);
 }
 
 export async function importMigrationBatch(batchId: number, user: SessionUser) {
   const batch = await requireBatch(batchId, user); assertCan(user, "imports", "write"); const resource = String(batch.business_type) as ResourceKey; assertCan(user, resource, "write");
   if (String(batch.status) !== "READY_TO_IMPORT") throw new Error("批次尚未完成人工确认");
-  const rows = await sqlQuery<{ id: number; sourceRow: number; normalizedData: Record<string, unknown>; rawData: Record<string, unknown>; filename: string; sheetName: string }>(`SELECT r.id,r.source_row AS "sourceRow",r.normalized_data AS "normalizedData",r.raw_data AS "rawData",f.filename,s.name AS "sheetName" FROM import_staging_rows r JOIN import_sheets s ON s.id=r.sheet_id JOIN import_files f ON f.id=s.file_id WHERE r.batch_id=$1 AND r.status IN ('READY','CONFIRMED') AND r.action='CREATE' ORDER BY r.source_row`, [batchId]);
+  const rows = await sqlQuery<{ id: number; fileId: number; sheetId: number; sourceRow: number; normalizedData: Record<string, unknown>; rawData: Record<string, unknown>; filename: string; sheetName: string }>(`SELECT r.id,f.id AS "fileId",s.id AS "sheetId",r.source_row AS "sourceRow",r.normalized_data AS "normalizedData",r.raw_data AS "rawData",f.filename,s.name AS "sheetName" FROM import_staging_rows r JOIN import_sheets s ON s.id=r.sheet_id JOIN import_files f ON f.id=s.file_id WHERE r.batch_id=$1 AND r.status IN ('READY','CONFIRMED') AND r.action='CREATE' ORDER BY r.source_row`, [batchId]);
   await sqlQuery(`UPDATE import_staging_rows SET status='SKIPPED',updated_at=now() WHERE batch_id=$1 AND action<>'CREATE'`, [batchId]);
   if (!rows.length) { await sqlQuery(`UPDATE import_batches SET status='COMPLETED',skipped_rows=total_rows,completed_at=now(),updated_at=now() WHERE id=$1`, [batchId]); return { successRows: 0, skippedRows: Number(batch.total_rows) }; }
   const normalized = rows.map((row) => jsonValue(row.normalizedData, {})); const checked = await preflightImport(resource, normalized, user);
   if (checked.errors.length) throw new Error(`正式写入前复检失败：${checked.errors.slice(0, 3).map((error) => `第${error.row}行 ${error.message}`).join("；")}`);
-  const lineage: MigrationLineageInput[] = rows.map((row) => ({ stagingId: Number(row.id), filename: row.filename, sheetName: row.sheetName, sourceRow: Number(row.sourceRow), rawData: jsonValue(row.rawData, {}) }));
+  const lineage: MigrationLineageInput[] = rows.map((row) => ({ stagingId: Number(row.id), fileId: Number(row.fileId), sheetId: Number(row.sheetId), filename: row.filename, sheetName: row.sheetName, sourceRow: Number(row.sourceRow), rawData: jsonValue(row.rawData, {}) }));
   try { return await importRowsAtomic(resource, normalized, rows[0].filename, checked.sourceHash, checked.companyId, user, { batchId, stagingRows: lineage }); }
   catch (error) { await sqlQuery(`UPDATE import_batches SET status='READY_TO_IMPORT',error_message=$1,updated_at=now() WHERE id=$2`, [error instanceof Error ? error.message : "正式导入失败", batchId]); throw error; }
 }

@@ -12,7 +12,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const user = await getSession(); if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
   try {
     const { id } = await context.params; const batchId = Number(id); const body = await request.json();
-    if (body.action === "confirm") { await confirmMigrationBatch(batchId, user); return NextResponse.json({ ok: true }); }
+    if (body.action === "confirm") { await confirmMigrationBatch(batchId, user, String(body.confirmation ?? "")); return NextResponse.json({ ok: true }); }
     if (body.action === "import") return NextResponse.json({ ok: true, result: await importMigrationBatch(batchId, user) });
     if (body.action === "rollback") return NextResponse.json(await rollbackMigrationBatch(batchId, user));
     if (body.operation === "update-row") { await updateStagingRow(batchId, Number(body.rowId), body, user); return NextResponse.json({ ok: true }); }

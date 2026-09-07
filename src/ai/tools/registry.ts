@@ -72,6 +72,7 @@ function moneyEvidence(label: string, cents: unknown, href?: string) {
 
 async function dashboardResult(context: AIToolContext): Promise<AIToolResult> {
   const dashboard = await getDashboardData(context.user, context.companyScope);
+  if (dashboard.isEmpty) return { summary: "当前授权范围尚未导入真实业务数据", data: { state: "empty", scopeLabel: dashboard.scopeLabel }, evidence: [] };
   const analytics = await getDashboardAnalytics(context.user, context.companyScope, dashboard.summary.balance);
   const firstGap = analytics.cashflow.find((point) => point.balanceCents < 0) ?? null;
   const cashflowHorizon = [7, 15, 30].map((day) => ({ day, ...(analytics.cashflow[Math.min(day, analytics.cashflow.length) - 1] ?? {}) }));
@@ -311,6 +312,7 @@ export const aiTools: RegisteredAITool[] = [
   define("get_dashboard_brief", "读取当前授权范围的经营驾驶舱、待办、现金流和项目健康数据", emptySchema, ["owner", "finance", "project_manager"], (_, context) => dashboardResult(context)),
   define("get_cashflow_forecast", "读取未来 7 或 30 天现金流预测，仅限老板和财务", daysSchema, financeRoles, async (args, context) => {
     const dashboard = await getDashboardData(context.user, context.companyScope);
+    if (dashboard.isEmpty) return { summary: "尚未导入真实账户与收支数据，不能生成现金流预测", data: { state: "empty" }, evidence: [] };
     const analytics = await getFinanceAnalytics(context.user, context.companyScope, Number(dashboard.summary.balance));
     const days = Number(args.days) === 7 ? 7 : 30;
     return { summary: `未来 ${days} 天现金流预测`, data: { days, balanceToday: analytics.balanceToday, projectedBalanceCents: days === 7 ? analytics.balance7 : analytics.balance30, cashflow: analytics.cashflow.slice(0, days) }, evidence: [moneyEvidence("当前余额", analytics.balanceToday, "/finance-workspace"), moneyEvidence(`${days} 天预计余额`, days === 7 ? analytics.balance7 : analytics.balance30, "/finance-workspace")] };

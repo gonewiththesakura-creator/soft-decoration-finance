@@ -549,12 +549,30 @@ export const importBatches = pgTable("import_batches", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const importSourceGroups = pgTable("import_source_groups", {
+  id: serial("id").primaryKey(),
+  groupKey: text("group_key").notNull().unique(),
+  projectHint: text("project_hint"),
+  firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const importFiles = pgTable("import_files", {
   id: serial("id").primaryKey(),
   batchId: integer("batch_id").notNull().references(() => importBatches.id),
+  sourceGroupId: integer("source_group_id").references(() => importSourceGroups.id),
   filename: text("filename").notNull(),
+  sourcePath: text("source_path"),
+  extension: text("extension"),
   fileSize: integer("file_size").notNull(),
   fileHash: text("file_hash").notNull(),
+  modifiedAt: timestamp("modified_at", { withTimezone: true }),
+  workbookStructure: jsonb("workbook_structure").notNull().default({}),
+  fingerprintStatus: text("fingerprint_status").notNull().default("NEW"),
+  managedStorageKey: text("managed_storage_key"),
+  versionNumber: integer("version_number").notNull().default(1),
+  isCurrent: boolean("is_current").notNull().default(true),
+  channel: text("channel").notNull().default("UPLOAD"),
   sheetCount: integer("sheet_count").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -570,6 +588,11 @@ export const importSheets = pgTable("import_sheets", {
   headers: jsonb("headers").notNull(),
   previewRows: jsonb("preview_rows").notNull(),
   rawRows: jsonb("raw_rows").notNull(),
+  classification: text("classification").notNull().default("UNKNOWN"),
+  classificationConfidence: integer("classification_confidence").notNull().default(0),
+  classificationWarnings: jsonb("classification_warnings").notNull().default([]),
+  isEmpty: boolean("is_empty").notNull().default(false),
+  structure: jsonb("structure").notNull().default({}),
   selected: boolean("selected").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [uniqueIndex("import_sheet_batch_index_idx").on(table.batchId, table.sheetIndex)]);
@@ -584,6 +607,17 @@ export const entityAliases = pgTable("entity_aliases", {
   createdBy: integer("created_by").notNull().references(() => users.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [uniqueIndex("entity_alias_company_type_idx").on(table.companyId, table.entityType, table.alias)]);
+
+export const fieldAliases = pgTable("field_aliases", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").references(() => companies.id),
+  businessType: text("business_type").notNull(),
+  sourceField: text("source_field").notNull(),
+  targetField: text("target_field").notNull(),
+  source: text("source").notNull().default("MANUAL"),
+  createdBy: integer("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [uniqueIndex("field_alias_scope_idx").on(table.companyId, table.businessType, table.sourceField, table.targetField)]);
 
 export const importStagingRows = pgTable("import_staging_rows", {
   id: serial("id").primaryKey(),
@@ -623,12 +657,40 @@ export const importDataLineage = pgTable("import_data_lineage", {
   stagingRowId: integer("staging_row_id").notNull().references(() => importStagingRows.id),
   targetTable: text("target_table").notNull(),
   targetId: integer("target_id").notNull(),
+  sourceFileId: integer("source_file_id").references(() => importFiles.id),
+  sourceSheetId: integer("source_sheet_id").references(() => importSheets.id),
   filename: text("filename").notNull(),
   sheetName: text("sheet_name").notNull(),
   sourceRow: integer("source_row").notNull(),
+  sourceColumn: text("source_column"),
+  sourceCell: text("source_cell"),
+  mappingRuleId: integer("mapping_rule_id").references(() => importMappingTemplates.id),
+  evidenceRole: text("evidence_role").notNull().default("PRIMARY"),
   rawData: jsonb("raw_data").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [uniqueIndex("import_lineage_target_idx").on(table.targetTable, table.targetId)]);
+
+export const importBusinessFacts = pgTable("import_business_facts", {
+  id: serial("id").primaryKey(),
+  batchId: integer("batch_id").notNull().references(() => importBatches.id),
+  factType: text("fact_type").notNull(),
+  businessKey: text("business_key").notNull(),
+  payload: jsonb("payload").notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [uniqueIndex("import_business_fact_batch_key_idx").on(table.batchId, table.factType, table.businessKey)]);
+
+export const importBusinessFactEvidence = pgTable("import_business_fact_evidence", {
+  id: serial("id").primaryKey(),
+  factId: integer("fact_id").notNull().references(() => importBusinessFacts.id),
+  fileId: integer("file_id").notNull().references(() => importFiles.id),
+  sheetId: integer("sheet_id").notNull().references(() => importSheets.id),
+  sourceRow: integer("source_row").notNull(),
+  sourceColumn: text("source_column"),
+  sourceCell: text("source_cell"),
+  evidenceRole: text("evidence_role").notNull().default("SUPPORTING"),
+  rawValue: text("raw_value"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const aiQueries = pgTable("ai_queries", {
   id: serial("id").primaryKey(),

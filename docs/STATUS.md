@@ -1,6 +1,20 @@
 # Version Status
 
-## Current: V1.6
+## Current: V1.7
+
+- Real data is the default operating mode. Startup bootstraps only one owner account and never inserts Demo business records.
+- Demo seeding and destructive Schema rebuild are restricted to explicit `DATA_MODE=demo` commands.
+- The real-data reset command requires an exact phrase, creates a compressed database backup and count manifest, preserves the owner account, and verifies that business tables are empty.
+- The migration center now has multi-file upload and owner-only server-folder scanning through one staging pipeline.
+- SHA-256 fingerprints, source groups, file versions, managed originals, Sheet classifications, business facts, source evidence and expanded lineage are persisted.
+- Dashboard, finance and procurement surfaces show a guided real-data empty state instead of fabricated zero-value conclusions.
+- Real-mode confirmation requires the exact phrase “确认导入真实数据”; formal import and rollback retain the existing transaction and dependency guards.
+- The automated suite covers 59 unit and integration tests, including an isolated real bootstrap/reset cycle.
+- The named Qingdao pilot workbook was not found locally; final manual upload and source-data reconciliation remain a user-operated acceptance gate.
+
+See `docs/V1.7-REAL-DATA-PILOT.md` for controls, limits and the remaining manual pilot steps.
+
+## Previous: V1.6
 
 - ZHIHENG DESIGN SYSTEM v2.0 and MOTION v1.0 are now the governed visual and motion sources of truth.
 - Project, finance, procurement and executive surfaces use the mineral-white, deep-forest, muted-teal and champagne design language.

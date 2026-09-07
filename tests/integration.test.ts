@@ -17,6 +17,9 @@ import { getProjectDetail } from "@/data/project-detail";
 import { authenticate } from "@/lib/auth";
 import { assertProjectAccess, assertWorkflowAccess } from "@/lib/access";
 import type { SessionUser } from "@/lib/auth";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join, sep } from "node:path";
+import { resolveAllowedImportFolder, scanImportFolder } from "@/data/import-folder";
 
 const owner: SessionUser = { id: 1, companyId: null, name: "陈屿", email: "owner@zhiheng.local", role: "owner" };
 
@@ -239,7 +242,11 @@ describe.sequential("business workflow integration", () => {
     const pending = await getMigrationBatch(workbook.batchId, finance); expect(pending.unresolvedReferences).toBe(1);
     await updateStagingRow(workbook.batchId, Number(pending.rows[0].id), { fieldKey: "companyId", confirmedReferenceId: 1 }, finance);
     const resolved = await getMigrationBatch(workbook.batchId, finance); expect(resolved.unresolvedReferences).toBe(0); expect(resolved.rows[0].status).toBe("READY");
-    await confirmMigrationBatch(workbook.batchId, finance); const imported = await importMigrationBatch(workbook.batchId, finance); expect(imported.successRows).toBe(1);
+    process.env.DATA_MODE = "real";
+    await expect(confirmMigrationBatch(workbook.batchId, finance)).rejects.toThrow("确认导入真实数据");
+    await confirmMigrationBatch(workbook.batchId, finance, "确认导入真实数据");
+    process.env.DATA_MODE = "demo";
+    const imported = await importMigrationBatch(workbook.batchId, finance); expect(imported.successRows).toBe(1);
     const [saved] = await sqlQuery<{ id: number; lineage: number; batchStatus: string }>(`SELECT c.id,(SELECT count(*)::int FROM import_data_lineage l WHERE l.target_table='customers' AND l.target_id=c.id) AS lineage,(SELECT status FROM import_batches WHERE id=$2) AS "batchStatus" FROM customers c WHERE c.code=$1`, [customerCode, workbook.batchId]);
     expect(saved.lineage).toBe(1); expect(saved.batchStatus).toBe("COMPLETED");
     const [template] = await sqlQuery<{ count: number }>(`SELECT count(*)::int AS count FROM import_mapping_templates WHERE name='客户历史表测试格式' AND business_type='customers'`); expect(template.count).toBe(1);
@@ -256,6 +263,26 @@ describe.sequential("business workflow integration", () => {
     const retry = await createMigrationWorkbook(makeFile("陈经理"), finance); const retryMappings = suggestedMappings("customers", retry.sheets[1].headers);
     const retryStage = await stageMigrationBatch({ batchId: retry.batchId, sheetId: retry.sheets[1].id, businessType: "customers", mappings: retryMappings }, finance); expect(retryStage.ready).toBe(1);
     await confirmMigrationBatch(retry.batchId, finance); expect((await importMigrationBatch(retry.batchId, finance)).successRows).toBe(1); expect((await rollbackMigrationBatch(retry.batchId, finance)).ok).toBe(true);
+  });
+
+  it("scans allowed folders read-only and detects unchanged, updated and duplicate files", async () => {
+    const root = process.env.IMPORT_ALLOWED_ROOTS!; await mkdir(root, { recursive: true });
+    const makeBytes = (marker: string) => {
+      const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet([{ 编号: marker, 名称: `扫描-${marker}` }]), "项目总表");
+      return Buffer.from(XLSX.write(book, { type: "buffer", bookType: "xlsx" }));
+    };
+    const sourcePath = join(root, `scan-${Date.now()}.xlsx`); const original = makeBytes("ORIGINAL"); await writeFile(sourcePath, original);
+    const first = await createMigrationWorkbook(new File([original], sourcePath.slice(sourcePath.lastIndexOf(sep) + 1)), owner, { channel: "FOLDER", sourcePath, modifiedAt: new Date() });
+    expect(first.fingerprintStatus).toBe("NEW");
+    const unchanged = await scanImportFolder({ folderPath: root }, owner); expect(unchanged.files.find((file) => file.path === sourcePath)?.status).toBe("UNCHANGED");
+
+    const updatedBytes = makeBytes("UPDATED"); await writeFile(sourcePath, updatedBytes);
+    const updated = await scanImportFolder({ folderPath: root }, owner); expect(updated.files.find((file) => file.path === sourcePath)?.status).toBe("UPDATED");
+    const duplicatePath = join(root, `copy-${Date.now()}.xlsx`); await writeFile(duplicatePath, original);
+    const duplicate = await scanImportFolder({ folderPath: root }, owner); expect(duplicate.files.find((file) => file.path === duplicatePath)?.status).toBe("DUPLICATE");
+
+    const finance = await financeFor(1); await expect(scanImportFolder({ folderPath: root }, finance)).rejects.toThrow("FOLDER_SCAN_FORBIDDEN");
+    await expect(resolveAllowedImportFolder(`${root}${sep}..`)).rejects.toThrow("不允许包含 ..");
   });
 
   it("stores attachments, enforces metadata, reads content and preserves void audit", async () => {

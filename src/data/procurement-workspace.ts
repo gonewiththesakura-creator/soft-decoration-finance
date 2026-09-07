@@ -13,6 +13,7 @@ function projectScope(user: SessionUser, scope: number | null, alias = "s") {
 
 export async function getProcurementWorkspace(user: SessionUser, scope: number | null) {
   assertCan(user, "skus", "read"); const scoped = projectScope(user, scope);
+  const [baseline] = await sqlQuery<{ companyCount: number }>(`SELECT count(*)::int AS "companyCount" FROM companies`);
   const rows = await sqlQuery<Record<string, unknown>>(`SELECT s.id,s.company_id AS "companyId",s.project_id AS "projectId",p.name AS "projectName",c.name AS "companyName",s.code,s.name,s.room,s.category,s.brand,s.model,s.specification,s.material,s.color,s.quantity,s.unit,s.budget_unit_cents AS "budgetUnitCents",s.image_url AS "legacyImageUrl",COALESCE((SELECT a.url FROM attachments a WHERE a.object_type='sku' AND a.object_id=s.id AND a.category='产品图片' AND NOT a.is_void ORDER BY a.created_at DESC LIMIT 1),s.image_url) AS "imageUrl",COALESCE((SELECT min(q.unit_price_cents) FROM supplier_quotes q WHERE q.sku_id=s.id),0)::float8 AS "lowestQuoteCents",selected.id AS "selectedQuoteId",selected.supplier_id AS "supplierId",sup.name AS "supplierName",selected.unit_price_cents AS "finalUnitCents",selected.freight_cents AS "freightCents",selected.install_cents AS "installCents",selected.lead_days AS "leadDays",COALESCE(
     (SELECT po.status FROM purchase_request_items pri JOIN purchase_requests pr ON pr.id=pri.request_id AND NOT pr.is_void AND pr.status<>'已驳回' JOIN purchase_orders po ON po.request_id=pr.id AND NOT po.is_void WHERE pri.sku_id=s.id ORDER BY po.ordered_at DESC LIMIT 1),
     (SELECT pr.status FROM purchase_request_items pri JOIN purchase_requests pr ON pr.id=pri.request_id AND NOT pr.is_void AND pr.status<>'已驳回' WHERE pri.sku_id=s.id ORDER BY pr.created_at DESC LIMIT 1),
@@ -21,7 +22,7 @@ export async function getProcurementWorkspace(user: SessionUser, scope: number |
   const skuIds = rows.map((row) => Number(row.id));
   const quotes = skuIds.length ? await sqlQuery<Record<string, unknown>>(`SELECT q.id,q.sku_id AS "skuId",q.supplier_id AS "supplierId",s.name AS "supplierName",q.unit_price_cents AS "unitPriceCents",q.freight_cents AS "freightCents",q.install_cents AS "installCents",q.tax_rate_bps AS "taxRateBps",q.lead_days AS "leadDays",q.payment_terms AS "paymentTerms",q.status,COALESCE((SELECT a.url FROM attachments a WHERE a.object_type='quote' AND a.object_id=q.id AND NOT a.is_void ORDER BY a.created_at DESC LIMIT 1),q.attachment_url) AS "attachmentUrl" FROM supplier_quotes q JOIN suppliers s ON s.id=q.supplier_id WHERE q.sku_id=ANY($1::int[]) ORDER BY q.sku_id,q.unit_price_cents`, [skuIds]) : [];
   const projects = Array.from(new Map(rows.map((row) => [Number(row.projectId), { id: Number(row.projectId), name: String(row.projectName), companyId: Number(row.companyId) }])).values());
-  return { rows, quotes, projects };
+  return { isEmpty: Number(baseline.companyCount) === 0, rows, quotes, projects };
 }
 
 export async function selectProcurementQuote(skuId: number, quoteId: number, user: SessionUser) {

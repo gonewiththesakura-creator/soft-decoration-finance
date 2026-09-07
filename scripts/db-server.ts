@@ -1,6 +1,8 @@
 import "dotenv/config";
 import { createServer } from "node:http";
 import { directClient, directQuery, ensureDirectDatabase } from "../src/db/direct";
+import { ensureBaseAdministrator } from "../src/db/bootstrap";
+import { getDataMode } from "../src/lib/data-mode";
 
 const port = Number(process.env.PGLITE_SERVER_PORT ?? 3199);
 let queue: Promise<unknown> = Promise.resolve();
@@ -30,6 +32,7 @@ function send(response: import("node:http").ServerResponse, status: number, valu
 
 async function main() {
   await ensureDirectDatabase();
+  await ensureBaseAdministrator();
   const server = createServer(async (request, response) => {
   if (request.method === "GET" && request.url === "/health") return send(response, 200, { ok: true, service: "zhiheng-pglite" });
   if (request.method !== "POST") return send(response, 404, { error: "Not found" });
@@ -68,7 +71,7 @@ async function main() {
   }
   });
 
-  server.listen(port, "127.0.0.1", () => console.log(`Database service ready on 127.0.0.1:${port}`));
+  server.listen(port, "127.0.0.1", () => console.log(`Database service ready on 127.0.0.1:${port} (${getDataMode()} mode)`));
   async function shutdown() { server.close(); await directClient.close(); process.exit(0); }
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);

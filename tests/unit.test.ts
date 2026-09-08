@@ -12,6 +12,7 @@ import { analyzeWorkbook, confidenceLevel, detectProjectConflict, extractProject
 import { duplicateRules } from "@/data/data-migration-rules";
 import { extractWorkbookImages } from "@/data/excel-images";
 import { strToU8, zipSync } from "fflate";
+import { normalizeDisplayName } from "@/data/user-profile";
 
 const finance: SessionUser = { id: 2, companyId: 1, name: "财务", email: "finance@test", role: "finance" };
 const designer: SessionUser = { id: 3, companyId: 1, name: "设计", email: "designer@test", role: "designer" };
@@ -36,6 +37,14 @@ describe("role permissions", () => {
     expect(can(procurement, "skus", "write")).toBe(true);
     expect(can(manager, "payment-requests", "write")).toBe(true);
     expect(can(manager, "receipts", "write")).toBe(false);
+  });
+});
+
+describe("user profile", () => {
+  it("normalizes a display name and rejects empty or oversized values", () => {
+    expect(normalizeDisplayName("  青岛  项目经理  ")).toBe("青岛 项目经理");
+    expect(() => normalizeDisplayName("   ")).toThrow("1-30");
+    expect(() => normalizeDisplayName("名".repeat(31))).toThrow("1-30");
   });
 });
 

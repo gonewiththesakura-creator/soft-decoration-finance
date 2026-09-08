@@ -20,6 +20,7 @@ import type { SessionUser } from "@/lib/auth";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { resolveAllowedImportFolder, scanImportFolder } from "@/data/import-folder";
+import { updateOwnDisplayName } from "@/data/user-profile";
 
 const owner: SessionUser = { id: 1, companyId: null, name: "陈屿", email: "owner@zhiheng.local", role: "owner" };
 
@@ -29,6 +30,18 @@ async function financeFor(companyId: number) {
 }
 
 describe.sequential("business workflow integration", () => {
+  it("lets a user change only their own display name and records the audit", async () => {
+    const [before] = await sqlQuery<{ name: string }>("SELECT name FROM users WHERE id=$1", [owner.id]);
+    const updatedName = `老板验收${Date.now()}`;
+    await expect(updateOwnDisplayName("   ", owner)).rejects.toThrow("1-30");
+    await expect(updateOwnDisplayName(updatedName, owner, "203.0.113.8")).resolves.toEqual({ changed: true, name: updatedName });
+    const [updated] = await sqlQuery<{ name: string }>("SELECT name FROM users WHERE id=$1", [owner.id]);
+    const [audit] = await sqlQuery<{ before: { name: string }; after: { name: string }; ip: string }>(`SELECT before,after,ip FROM audit_logs WHERE object_type='user_profile' AND object_id=$1 AND action='UPDATE_DISPLAY_NAME' ORDER BY id DESC LIMIT 1`, [owner.id]);
+    expect(updated.name).toBe(updatedName);
+    expect(audit).toEqual({ before: { name: before.name }, after: { name: updatedName }, ip: "203.0.113.8" });
+    await updateOwnDisplayName(before.name, { ...owner, name: updatedName });
+  });
+
   it("enforces project membership and company scope for a project manager", async () => {
     const [manager] = await sqlQuery<{ id: number; companyId: number; name: string; email: string }>(`SELECT id,company_id AS "companyId",name,email FROM users WHERE role='project_manager' AND company_id=1 LIMIT 1`);
     const user: SessionUser = { ...manager, role: "project_manager" };

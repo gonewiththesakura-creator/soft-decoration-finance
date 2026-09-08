@@ -1,16 +1,16 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import {
   BadgeDollarSign, Banknote, Boxes, Building2, FileClock, FileSpreadsheet, FileText,
-  Bot, FolderKanban, HandCoins, History, LayoutDashboard, LockKeyhole, LogOut, Menu,
-  PackageCheck, ReceiptText, Settings2, ShoppingCart, Tags, Truck, Users, WalletCards, X,
+  Bot, FolderKanban, HandCoins, History, LayoutDashboard, LoaderCircle, LockKeyhole, LogOut, Menu,
+  PackageCheck, Pencil, ReceiptText, Save, Settings2, ShoppingCart, Tags, Truck, Users, WalletCards, X,
 } from "lucide-react";
 import type { SessionUser } from "@/lib/auth";
 import { can, roleLabels, type ResourceKey } from "@/lib/permissions";
-import { logoutAction, setCompanyScope } from "@/app/(app)/actions";
+import { logoutAction, setCompanyScope, updateProfileName } from "@/app/(app)/actions";
 import { GlobalAIAssistant } from "@/components/ai/global-ai-assistant";
 
 type Company = { id: number; name: string };
@@ -25,7 +25,18 @@ const groups = [
 
 export function AppShell({ user, companies, currentScope, aiReady, children }: { user: SessionUser; companies: Company[]; currentScope: number | null; aiReady: boolean; children: React.ReactNode }) {
   const pathname = usePathname(); const router = useRouter(); const [open, setOpen] = useState(false); const [, startTransition] = useTransition();
+  const [displayName, setDisplayName] = useState(user.name); const [profileOpen, setProfileOpen] = useState(false); const [profileName, setProfileName] = useState(user.name); const [profileError, setProfileError] = useState(""); const [profilePending, startProfileTransition] = useTransition();
+  useEffect(() => setDisplayName(user.name), [user.name]);
   function changeScope(value: string) { startTransition(async () => { await setCompanyScope(value); router.refresh(); }); }
+  function openProfile() { setProfileName(displayName); setProfileError(""); setProfileOpen(true); }
+  function saveProfile(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setProfileError("");
+    startProfileTransition(async () => {
+      const result = await updateProfileName(profileName);
+      if (!result.ok) { setProfileError(result.error); return; }
+      setProfileName(result.name); setDisplayName(result.name); setProfileOpen(false); router.refresh();
+    });
+  }
   return (
     <div className="app-shell has-global-ai">
       <aside className={`sidebar ${open ? "open" : ""}`}>
@@ -34,13 +45,14 @@ export function AppShell({ user, companies, currentScope, aiReady, children }: {
           const visible = group.items.filter((item) => can(user, item.resource)); if (!visible.length) return null;
           return <div className="nav-group" key={group.label}><div className="nav-label">{group.label}</div>{visible.map((item) => <Link key={item.href} href={item.href} onClick={() => setOpen(false)} className={`nav-link ${pathname === item.href || pathname.startsWith(`${item.href}/`) ? "active" : ""}`}><item.icon />{item.label}</Link>)}</div>;
         })}</nav>
-        <div className="sidebar-user"><div className="avatar">{user.name.slice(0, 1)}</div><div className="user-meta"><div className="user-name">{user.name}</div><div className="user-role">{roleLabels[user.role]}</div></div><form action={logoutAction}><button className="icon-plain" type="submit" aria-label="退出登录" title="退出登录"><LogOut /></button></form></div>
+        <div className="sidebar-user"><button className="sidebar-profile" type="button" onClick={openProfile} title="个人设置" aria-label={`个人设置：${displayName}`}><div className="avatar">{displayName.slice(0, 1)}</div><div className="user-meta"><div className="user-name">{displayName}</div><div className="user-role">{roleLabels[user.role]}</div></div><Pencil aria-hidden="true" /></button><form action={logoutAction}><button className="icon-plain" type="submit" aria-label="退出登录" title="退出登录"><LogOut /></button></form></div>
       </aside>
       <div className="main-column">
         <header className="topbar"><div className="topbar-left"><button className="icon-plain mobile-menu" onClick={() => setOpen(true)} aria-label="打开菜单"><Menu /></button><div><div className="scope-label">当前数据范围</div>{user.role === "owner" ? <select className="scope-select" value={currentScope ?? "all"} onChange={(event) => changeScope(event.target.value)} disabled={!companies.length}><option value="all">{companies.length ? "集团汇总 · 全部公司" : "尚未导入公司数据"}</option>{companies.map((company) => <option value={company.id} key={company.id}>{company.name}</option>)}</select> : <div className="scope-select">{companies.find((company) => company.id === user.companyId)?.name ?? "尚未分配公司"}</div>}</div></div><div className="topbar-right"><div className="date-chip">{new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric", weekday: "short" }).format(new Date())}</div></div></header>
         {children}
       </div>
       <GlobalAIAssistant role={user.role} ready={aiReady} />
+      {profileOpen ? <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !profilePending && setProfileOpen(false)}><div className="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-title" onKeyDown={(event) => event.key === "Escape" && !profilePending && setProfileOpen(false)}><form onSubmit={saveProfile}><div className="modal-header"><div><div className="modal-title" id="profile-title">个人设置</div><div className="panel-subtitle">账户资料</div></div><button className="icon-plain" type="button" aria-label="关闭" disabled={profilePending} onClick={() => setProfileOpen(false)}><X /></button></div><div className="form-grid profile-form-grid"><div className="field full"><label htmlFor="profile-name">显示名称 <span className="required">*</span></label><input className="input" id="profile-name" value={profileName} minLength={1} maxLength={30} required autoComplete="name" autoFocus disabled={profilePending} onChange={(event) => setProfileName(event.target.value)} /></div><div className="field"><label htmlFor="profile-email">登录邮箱</label><input className="input profile-readonly" id="profile-email" value={user.email} readOnly /></div><div className="field"><label htmlFor="profile-role">角色</label><input className="input profile-readonly" id="profile-role" value={roleLabels[user.role]} readOnly /></div>{profileError ? <div className="form-error" role="alert">{profileError}</div> : null}</div><div className="modal-footer"><button className="button" type="button" disabled={profilePending} onClick={() => setProfileOpen(false)}>取消</button><button className="button primary" type="submit" disabled={profilePending}>{profilePending ? <LoaderCircle className="animate-spin" /> : <Save />}{profilePending ? "正在保存" : "保存名称"}</button></div></form></div></div> : null}
     </div>
   );
 }
